@@ -104,38 +104,46 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
 
 #add_theme
 ```{r}
+#having issues with high max_bubble_size (> ~30), but that may be unavoidable due to space constraints
 add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_text, breaks, bubbles, max_bubble_size, continental) {
   font = "Arial"
   
   #I fit the caption vertical alignment for max_bubble_size 20. It seems like about 10 (changed to 8 currently for troubleshooting) max bubble size fully submerges the caption by one line. A line is about 0.025 units tall iirc
-  caption_line_height = 0.025
-  bubble_size_adjustment = if_else(bubbles, ((20-max_bubble_size)/8)*caption_line_height, 0)
-  #for each 5 breaks, there is a new line, adjust caption height for that
-  if(!is.na(breaks)[1]){
-    break_adjustment = floor(-0.01+length(breaks)/5)*(0.75*caption_line_height) #this needs more fine tuning
-  } else{
-      break_adjustment = 0
-    }
+  # caption_line_height = 0.025
+  # bubble_size_adjustment = if_else(bubbles, ((20-max_bubble_size)/8)*caption_line_height, 0)
+  # #for each 5 breaks, there is a new line, adjust caption height for that
+  # if(!is.na(breaks)[1]){
+  #   break_adjustment = floor(-0.01+length(breaks)/5)*(0.75*caption_line_height) #this needs more fine tuning
+  # } else{
+  #     break_adjustment = 0
+  #   }
   
-  if(bubbles){
-    title_height = 1
-  } else{
-    title_height = 1.03
-  }
+  # if(bubbles){
+  #   title_height = 1
+  # } else{
+  #   title_height = 1.03
+  # }
+  
+  title_height = 1.05 #we have more vertical space now
+  
   if(continental) {
     title_alignment = 0.5
+    left_margin = 0.025
   } else{
     title_alignment = 0.551
+    left_margin = 0.128
   }
-  subtitle_offset = 0.06*(font_size/36)
-  if(continental){continental_offset = 0.145}else{continental_offset = 0}
+  subtitle_offset = 0.06*(font_size/36) # Vertical adjustment for subtitle
+  if(continental){continental_offset = 0.14}else{continental_offset = 0}
   
   plot <- plot +
     theme_minimal(base_family = font) +
     theme(
       legend.title = element_blank(),
       legend.text = element_text(size = 12, color = palette$text_color ,face = "bold"),
-      legend.position = "bottom",
+      #legend.position = "bottom",
+      legend.position = c(left_margin, -0.02),
+      legend.justification = "left",
       legend.direction = "horizontal",
       legend.key.width = unit(if_else(is.na(breaks[1]), 1.5, 0.5), "cm"),
       legend.key.height = unit(0.5, "cm"),
@@ -145,14 +153,15 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
       axis.title = element_blank(),
       axis.text = element_blank(),
       axis.ticks = element_blank(),
-      legend.box.margin = margin(if_else(continental, 100, 40), 0, if_else(continental, -40, 0), if_else(continental, 0, 83)),
+      #legend.box.margin = margin(if_else(continental, 100, 40), 0, if_else(continental, -40, 0), if_else(continental, 0, 83)),
+      legend.box.margin = margin(0, 0, 0, 0),
       plot.margin = margin(0, if_else(continental, -20, -20), 0, if_else(continental, -20, -110))
     ) +
     coord_sf(clip = "off") +
     annotation_custom(grid::textGrob(
       inset_text,
-      x = unit(if_else(continental, 0.03, 0.57), "npc"),
-      y = unit(-0.115 - continental_offset, "npc"),
+      x = unit(if_else(continental, 0.52, 0.57), "npc"),
+      y = unit(-0.12 - continental_offset, "npc"),
       hjust = 0,
       vjust = 0,
       gp = grid::gpar(
@@ -176,22 +185,30 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
       "@hdk_maps",
       gp = grid::gpar(fontsize = 12, col = palette$title_color, fontface = "bold", fontfamily = font),
       x = unit(title_alignment, "npc"),
-      y = unit(title_height - subtitle_offset - if_else(is.na(subtitle), 0, 0.03), "npc"),
+      y = unit(title_height - subtitle_offset - if_else(is.na(subtitle), 0, 0.034), "npc"),
       hjust = 0.5
      )) +
     annotation_custom(grid::textGrob(
       caption,
       gp = grid::gpar(fontsize = 10, col = palette$text_color, fontfamily = font),
-      x = unit(if_else(continental, 0.03, 0.128), "npc"),
-      y = unit(if_else(bubbles,-0.24 + bubble_size_adjustment, -0.21 - break_adjustment) - continental_offset, "npc"),
+      x = unit(left_margin, "npc"),
+      y = unit(if_else(continental, -0.26, -0.15), "npc"),
       hjust = 0,
       vjust = 0
     ))
+    # annotation_custom(grid::textGrob(
+    #   caption,
+    #   gp = grid::gpar(fontsize = 10, col = palette$text_color, fontfamily = font),
+    #   x = unit(left_margin, "npc"),
+    #   y = unit(if_else(bubbles,-0.24 + bubble_size_adjustment, -0.21 - break_adjustment) - continental_offset, "npc"),
+    #   hjust = 0,
+    #   vjust = 0
+    # ))
   if (!is.na(subtitle)) {
     plot <- plot +
       annotation_custom(grid::textGrob(
         subtitle,
-        gp = grid::gpar(fontsize = font_size/2, col = palette$title_color, fontface = "bold", fontfamily = font),
+        gp = grid::gpar(fontsize = font_size/1.75, col = palette$title_color, fontface = "bold", fontfamily = font),
         x = unit(title_alignment, "npc"),
         y = unit(title_height - subtitle_offset, "npc"),
         hjust = 0.5
@@ -340,6 +357,7 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
 
 #choropleth_map
 ```{r}
+#find powers 10 times 1, 2, and 5 closest to 0.25, 0.5, 0.75, 0.9, 0.95 quantiles?
 #figure out how to dynamically set text to a lighter color if the fill is dark for state level map
 choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, dollar, unit, region, scale_center, logratio, show_endpoints) {
   
@@ -494,7 +512,8 @@ map <- map |>
 
 ###map
 ```{r}
-#netmigration only really affects text for bubbles and inset, so get rid of if and just have custom text parameters
+#trim aleutian islands off of alaska?
+#netmigration only really affects text for bubbles and inset, so get rid of it and just have custom text parameters
 map <- function(data, map, state_map = NULL, title, source, font_size = NA, years = NA, bubbles = TRUE, unit = "", per = "", max_bubble_size = NA, continental = FALSE, borders = FALSE, graphicspath, palette = list(), inset_cutoff = -1000000000, cutoff_column = "Value", breaks = NA, na_to_0 = FALSE, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, cbsa = NA, migration_type = NA, merge_MSAs = F, scale_center = NA, logratio = F, netmigration = F, inset_title_custom = NA, dpi = 300, show_endpoints = F) {
   
   palette = set_palette(palette)
@@ -524,7 +543,7 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
     
   #highlight region can be specified with region_fips or cbsa code
   if (is.na(region_fips)[1] & !is.na(cbsa)) { #find region_fips from cbsa
-    MSAs <- read.csv("MSAs_crosswalk.xls")
+    MSAs <- read_csv("MSAs_crosswalk.csv")
     if(level == "state"){
       stop("CBSA code supplied, but map is at the state level.")
     }
@@ -540,8 +559,38 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
     }
     data = get_migration_data(data, region_fips, migration_type, logratio)
   }
+    
+    caption_manual <- ifelse(!str_detect(caption_manual, "\n$") & caption_manual != "", str_c(caption_manual, "\n"), caption_manual) #make sure manual caption ends in \n
+
+    #this could be generalized a bit
+  if (source == "USDA") {
+    caption <- paste0("Source: USDA Agriculture Census\n")
+  } else if (source == "IRS") {
+    if(is.na(years)[1]){
+      first_year = 2012 #default
+      last_year = 2022 #previously I was including the lower endpoint for IRS data but that's just semantics
+      years = 2012:2022
+      cat("Using default years for IRS data: 2012-2022\n")
+    }
+    if(last_year > 2021){
+       caption_manual = paste0(caption_manual, "Connecticut data is ",first_year,"-",2021,"\n")
+    }
+    caption <- paste0("Source: ",first_year, "-", last_year," IRS Migration Data\n")
+  } else if (source == "ACS") {
+    if(is.na(years)[1]){
+      first_year = 2011 #default
+      last_year = 2020
+      years = 2011:2020
+      cat("Using default years for ACS data: 2011-2020\n")
+    }
+    caption <- paste0("Source: ",first_year, "-", last_year," ACS Migration Data\n")
+  } else {
+    caption = ""
+  }
+  caption <- paste0(caption, caption_manual, "Created in R")
+    
   if (per == "capita" & length(years) > 1 | per == "year") {
-    num_years_ct = length(years[years < 2022])
+    num_years_ct = length(years[years < 2022]) #we don't have post-2021 data for CT due to the switch to planning regions, but I should write this better for post-2021 maps, but that is difficult without requiring that the data argument be un-aggregated by year
     num_years_notct = length(years)
     data <- data |>
       mutate(
@@ -563,6 +612,10 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
   } else{
     region = NA
   }
+    
+    data <- data |> #the only two columns we will use
+      select(fips, Value)
+    
   if(level == "MSA"){ #this option is for if data are already merged by MSA, otherwise county_map is supplied for map and merge_MSAs is true
     map = map |> #for MSA map we need to join by name because of non-metro counties
       full_join(data, by = join_by(metro_name == name)) |>
@@ -602,32 +655,10 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
     unit <- paste0(" ", unit)
   }
   
-    caption_manual <- ifelse(!str_detect(caption_manual, "\n$") & caption_manual != "", str_c(caption_manual, "\n"), caption_manual) #make sure manual caption ends in \n
-
-    #this could be generalized a bit
-  if (source == "USDA") {
-    caption <- paste0("Source: USDA Agriculture Census\n")
-  } else if (source == "IRS") {
-    if(is.na(years)[1]){
-      first_year = 2012 #default
-      last_year = 2022 #previously I was including the lower endpoint for IRS data but that's just semantics
-    }
-    if(last_year > 2021){
-       caption_manual = paste0(caption_manual, "Connecticut data is ",first_year,"-",2021,"\n")
-    }
-    caption <- paste0("Source: ",first_year, "-", last_year," IRS Migration Data\n")
-  } else if (source == "ACS") {
-    if(is.na(years)[1]){
-      first_year = 2011 #default
-      last_year = 2020
-    }
-    caption <- paste0("Source: ",first_year, "-", last_year," ACS Migration Data\n")
-  } else {
-    caption = ""
-  }
-  caption <- paste0(caption, caption_manual, "Created in R")
-  
     if(per %in% c("capita", "capita_total", "year")){ #use capita_total to divide by population over a period of time but not year (ex. for cumulative % population changes over multiple years)
+      if(is.na(years)[1]){
+        stop("Specify which years the data are for.")
+      }
       pop_cols <- paste0("pop", substr(years, 3, 4))
       map <- map %>%
         rowwise() %>%
@@ -864,8 +895,7 @@ get_migration_data <- function(data, region_fips, migration_type, logratio){
 #merge_by_MSA
 ```{r}
 merge_by_MSA <- function(county_map, region_fips){
-   MSAs <- read.csv("MSAs_crosswalk.csv") |>
-     select(cbsa_code, metro_name, fips)
+   MSAs <- read.csv("MSAs_crosswalk.csv")
   
   map <- county_map |>
       left_join(MSAs, by = "fips") |>
@@ -881,6 +911,7 @@ merge_by_MSA <- function(county_map, region_fips){
       ungroup()
     }
   
+  #there may be a better way to do this
       aggregate_cols = setdiff(colnames(map), c("fips", "county", "abbr", "state", "x", "y", "name", "geometry", "cbsa_code", "metro_name"))
       
       map <- map |>
@@ -889,7 +920,7 @@ merge_by_MSA <- function(county_map, region_fips){
         geometry = st_union(geometry),
         #across(contains("pop"), ~sum(.x)),
         #cutoff = sum(cutoff, na.rm = T), #cutoff is almost always something that can be aggregated
-        across(all_of(aggregate_cols), ~sum(.x))
+        across(all_of(aggregate_cols), ~sum(.x, na.rm = T))
         ) |>
       ungroup()
 
