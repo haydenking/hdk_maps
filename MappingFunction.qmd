@@ -11,12 +11,13 @@ library(ggplot2)
 library(sf)
 library(ggfx)
 library(ggrepel)
-#map with per capita shading and bubbles
-#aggregate by state and then use state map options
+#TO DO:
+#map with per capita shading and bubbles for absolute count
+#aggregate county data by state and then use state map options
 ```
 #create_inset
 ```{r}
-create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff, cutoff_column, dollar, unit, netmigration, logratio, scale_center, inset_title_custom) {
+create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff, cutoff_column, dollar, unit, netmigration, logratio, scale_center, inset_title_custom, hide_values) {
   #people don't like inverted ratios, so maybe I don't need that option
   if(style == "top" & min(map$Value, na.rm = T) < 0){
     dollar = paste0("+",dollar)
@@ -58,8 +59,13 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
       rank = if_else(as.numeric(rank) < 10, paste0(rank, ".   "), paste0(rank, ". "))
     )
   
+  if(hide_values){
     inset_data <- inset_data |>
-      mutate(label = paste0(rank, name, ": ",dollar,sapply(Value, shorten), unit))
+      mutate(label = paste0(rank, name))
+  } else{
+    inset_data <- inset_data |>
+      mutate(label = paste0(rank, name,": ", dollar, sapply(Value, shorten), unit))
+  }
 
     #took out invert functionality because people don't like it
     # inset_data <- inset_data |>
@@ -104,25 +110,10 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
 
 #add_theme
 ```{r}
+#legend takes up too much space when it has to do color and size, covers up caption
 #having issues with high max_bubble_size (> ~30), but that may be unavoidable due to space constraints
-add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_text, breaks, bubbles, max_bubble_size, continental) {
+add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag) {
   font = "Arial"
-  
-  #I fit the caption vertical alignment for max_bubble_size 20. It seems like about 10 (changed to 8 currently for troubleshooting) max bubble size fully submerges the caption by one line. A line is about 0.025 units tall iirc
-  # caption_line_height = 0.025
-  # bubble_size_adjustment = if_else(bubbles, ((20-max_bubble_size)/8)*caption_line_height, 0)
-  # #for each 5 breaks, there is a new line, adjust caption height for that
-  # if(!is.na(breaks)[1]){
-  #   break_adjustment = floor(-0.01+length(breaks)/5)*(0.75*caption_line_height) #this needs more fine tuning
-  # } else{
-  #     break_adjustment = 0
-  #   }
-  
-  # if(bubbles){
-  #   title_height = 1
-  # } else{
-  #   title_height = 1.03
-  # }
   
   title_height = 1.05 #we have more vertical space now
   
@@ -182,7 +173,7 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
       hjust = 0.5
     )) +
     annotation_custom(grid::textGrob(
-      "@hdk_maps",
+      if_else(tag, "@hdk_maps", ""),
       gp = grid::gpar(fontsize = 12, col = palette$title_color, fontface = "bold", fontfamily = font),
       x = unit(title_alignment, "npc"),
       y = unit(title_height - subtitle_offset - if_else(is.na(subtitle), 0, 0.034), "npc"),
@@ -196,14 +187,6 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
       hjust = 0,
       vjust = 0
     ))
-    # annotation_custom(grid::textGrob(
-    #   caption,
-    #   gp = grid::gpar(fontsize = 10, col = palette$text_color, fontfamily = font),
-    #   x = unit(left_margin, "npc"),
-    #   y = unit(if_else(bubbles,-0.24 + bubble_size_adjustment, -0.21 - break_adjustment) - continental_offset, "npc"),
-    #   hjust = 0,
-    #   vjust = 0
-    # ))
   if (!is.na(subtitle)) {
     plot <- plot +
       annotation_custom(grid::textGrob(
@@ -220,21 +203,14 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
 
 #handle_per
 ```{r}
-handle_per <- function(map, source, per, subtitle) {
+handle_per <- function(map, source, per, subtitle, scale_factor) {
   
   if (per %in% c("capita", "capita_total") ) {
       map <- map |> 
         mutate(Value = Value / avg_pop)
-      #this code isn't very good, will rewrite
-      # if(median(abs(map$Value),na.rm = T) > 1/100000) {
-      #   map <- map |> 
-      #     mutate(Value = Value *100000)
-      #   subtitle <- if_else(is.na(subtitle), "Rate per 100k per year", subtitle)
-      # } else if(median(abs(map$Value),na.rm = T) > 1/1000){
-      #   map <- map |>
-      #     mutate(Value = 1000 * Value)
-      #   subtitle <- if_else(is.na(subtitle), "Rate per 1,000 per year", subtitle)
-      # }
+      if(scale_factor != 1){
+        subtitle = paste0("Rate per ", shorten(scale_factor), if_else(per == "capita", " per year", ""))
+      }
     } else if (per == "sqmi") {
     map <- map |>
       mutate(Value = Value / sqmi)
@@ -293,7 +269,18 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
         color = ifelse(borders, "white", NA), size = 0.1, show.legend = FALSE
       ),
       x_offset = 3, y_offset = 3, sigma = 3, color = "grey70"
-    ) +
+    )
+    
+    if(!is.na(region)){
+    plot <- plot +
+      geom_sf(
+        data = region,
+        fill = palette$highlight_color,
+        color = "white"
+      )
+  }
+    
+   plot <- plot +
     scale_size_continuous(
       range = c(min_bubble_size, max_bubble_size),
       name = "",
@@ -309,14 +296,6 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
     if (!is.null(state_map)) {
     plot <- plot +
       geom_sf(data = state_map, color = "black", fill = NA, size = 0.1)
-  }
-  if(!is.na(region)){
-    plot <- plot +
-      geom_sf(
-        data = region,
-        fill = palette$highlight_color,
-        color = "white"
-      )
   }
     
   if(is.na(scale_center)) {
@@ -341,7 +320,7 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
       scale_color_manual(
         values = c("Positive" = palette$high_color, "Negative" = palette$low_color), na.translate = FALSE)
   }
-  
+    
   if(is.na(scale_center)){
     plot <- plot +
       guides(color = "none", size = guide_legend(override.aes = list(color = palette$high_color)))
@@ -357,7 +336,7 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
 
 #choropleth_map
 ```{r}
-#find powers 10 times 1, 2, and 5 closest to 0.25, 0.5, 0.75, 0.9, 0.95 quantiles?
+#auto-breaks: find powers 10 times 1, 2, and 5 closest to 0.25, 0.5, 0.75, 0.9, 0.95 quantiles?
 #figure out how to dynamically set text to a lighter color if the fill is dark for state level map
 choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, dollar, unit, region, scale_center, logratio, show_endpoints) {
   
@@ -401,7 +380,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
   if(is.na(scale_center)){ #I don't have code to remove empty breaks for two-sided because I don't want asymmetrical breaks so it'd be more complicated
     breaks = remove_empty_breaks(map, breaks)
   }
-  if (is.na(labels_manual[1])) { #for two-sided breaks centered at 0, add a + sign
+  if (is.na(labels_manual[1])) { #TO DO: for two-sided breaks centered at 0, add a + sign for positive values
       formatted_labels <- paste0(dollar,
                                    sapply(head(breaks, -1), shorten),
                                    " to ",
@@ -512,11 +491,16 @@ map <- map |>
 
 ###map
 ```{r}
+#put error handling in separate function?
 #trim aleutian islands off of alaska?
 #netmigration only really affects text for bubbles and inset, so get rid of it and just have custom text parameters
-map <- function(data, map, state_map = NULL, title, source, font_size = NA, years = NA, bubbles = TRUE, unit = "", per = "", max_bubble_size = NA, continental = FALSE, borders = FALSE, graphicspath, palette = list(), inset_cutoff = -1000000000, cutoff_column = "Value", breaks = NA, na_to_0 = FALSE, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, cbsa = NA, migration_type = NA, merge_MSAs = F, scale_center = NA, logratio = F, netmigration = F, inset_title_custom = NA, dpi = 300, show_endpoints = F) {
+map <- function(data, map, state_map = NULL, title, source, font_size = NA, years = NA, bubbles = TRUE, unit = "", per = "", max_bubble_size = NA, continental = FALSE, borders = FALSE, graphicspath, palette = list(), inset_cutoff = -1000000000, cutoff_column = "Value", breaks = NA, na_to_0 = FALSE, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, cbsa = NA, migration_type = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, netmigration = F, inset_title_custom = NA, dpi = 300, show_endpoints = F, hide_values = F, tag = T) {
   
   palette = set_palette(palette)
+  
+  if(nrow(data) == 0){
+    stop("Data has 0 rows")
+  }
   
   if (all(nchar(map$fips) == 2)) {
   level <- "state"
@@ -525,7 +509,7 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
 } else if("cbsa_code" %in% colnames(map)){
   level <- "MSA"
 } else {
-  stop("Error: The map doesn't contain valid FIPS codes or CBSA codes.")
+  stop("The map doesn't contain valid FIPS codes or CBSA codes.")
 }
   
   #years should be a list of years. It can be specified 2019:2022 for example
@@ -614,7 +598,8 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
   }
     
     data <- data |> #the only two columns we will use
-      select(fips, Value)
+      select(fips, Value) |>
+      mutate(Value = Value*scale_factor) #for scaling (ex. scale_factor = 100000 for rate per 100000)
     
   if(level == "MSA"){ #this option is for if data are already merged by MSA, otherwise county_map is supplied for map and merge_MSAs is true
     map = map |> #for MSA map we need to join by name because of non-metro counties
@@ -670,22 +655,18 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
         ungroup()
     }
   
-  per_capita_result <- handle_per(map, source, per, subtitle)
+  per_capita_result <- handle_per(map, source, per, subtitle, scale_factor)
   map <- per_capita_result$map
   subtitle <- per_capita_result$subtitle
-
-  if(!is.na(scale_center) & inset_style != "hidden"){
-    inset_style = "split" #only looking at one way wouldn't make sense
-  }
   
   if (inset_style == "hidden") {
     inset_text <- ""
   } else if (inset_style %in% c("top", "bottom")) {
-    inset_text <- create_inset(map, level, inset_style, 10, inset_cutoff, cutoff_column, dollar, unit, netmigration, logratio, scale_center, inset_title_custom)
+    inset_text <- create_inset(map, level, inset_style, 10, inset_cutoff, cutoff_column, dollar, unit, netmigration, logratio, scale_center, inset_title_custom, hide_values)
   } else if (inset_style == "split") {
-    top <- create_inset(map, level, "top", 5, inset_cutoff, cutoff_column, dollar, unit, netmigration, logratio, scale_center, inset_title_custom)
+    top <- create_inset(map, level, "top", 5, inset_cutoff, cutoff_column, dollar, unit, netmigration, logratio, scale_center, inset_title_custom, hide_values)
     bottom <- create_inset(map, level, "bottom", 5, inset_cutoff, cutoff_column, dollar, unit, netmigration, logratio, scale_center, inset_title_custom)
-    inset_text = paste0(top, bottom)
+    inset_text = paste0(top, bottom, hide_values)
   }
   
     if (continental) { #filter out AK and HI after inset
@@ -714,7 +695,7 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
     select(abs_value) |>
     mutate(normalized_bubble_size = abs_value/max,
            normalized_bubble_size = replace_na(normalized_bubble_size, 0))
-  inflation_factor = 3000/sum(bubble$normalized_bubble_size) #3000 was arrived at by trial and error
+  inflation_factor = 3000/sum(bubble$normalized_bubble_size) #3000 was arrived at by trial and error, and doesn't work well for maps where the data is all clustered in one area
   max_bubble_size = sqrt(max(bubble$normalized_bubble_size)*inflation_factor) #bubble size is in terms of radius not area
   cat("Auto max bubble size: ", max_bubble_size, "\n")
   }
@@ -726,7 +707,7 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
     breaks = choropleth$breaks
   }
   
-  plot <- add_theme(plot, title, palette, subtitle, font_size, caption, inset_text, breaks, bubbles, max_bubble_size, continental)
+  plot <- add_theme(plot, title, palette, subtitle, font_size, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag)
   
   if (!is.na(breaks[1])) {
     plot <- plot +
@@ -742,24 +723,22 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
 
 #helper functions
 ```{r}
-compute_breaks <- function(values) {
+compute_breaks <- function(values) { # This is for finding good bubble sizes for the legend
   max_value <- max(values, na.rm = TRUE)
   min_value <- max(min(values , na.rm = TRUE),1)
   
   # Get the powers of 10 between min_value and max_value
   powers_of_10 <- 10^(ceiling(log10(min_value)):floor(log10(max_value)))
   
-  # Check if max_value exceeds the highest power of 10 by more than 5x
   if (max_value > 5 * max(powers_of_10)) {
     powers_of_10 <- c(powers_of_10, 5 * max(powers_of_10))
   } else if(max_value > 2 * max(powers_of_10)){
     powers_of_10 <- c(powers_of_10, 2 * max(powers_of_10))
   }
   
-  # Combine the values and return unique, sorted breaks
   breaks <- sort(unique(powers_of_10))
   if (length(breaks) > 4) {
-    breaks <- tail(breaks, 4)
+    breaks <- tail(breaks, 4) # No more than 4 bubbles in legend
   }
   return(breaks)
 }
@@ -773,7 +752,7 @@ remove_empty_breaks <- function(map, breaks){
   for (i in 2:(length(breaks) - 1)) {
     # Check if there are any values between the previous break and the current break
     if (any(data >= breaks[i - 1] & data < breaks[i], na.rm = TRUE)) {
-      # Keep the current break
+      # if there are, keep the current break
       adjusted_breaks <- c(adjusted_breaks, breaks[i])
     }
   }
@@ -912,7 +891,7 @@ merge_by_MSA <- function(county_map, region_fips){
     }
   
   #there may be a better way to do this
-      aggregate_cols = setdiff(colnames(map), c("fips", "county", "abbr", "state", "x", "y", "name", "geometry", "cbsa_code", "metro_name"))
+      aggregate_cols = setdiff(colnames(map), c("fips", "county", "abbr", "state", "x", "y", "name", "geometry", "cbsa_code", "metro_name")) #this only works because I remove all column but fips and Value from the data fed into map(), but in the future, I may want to allow data to have other columns that do other things, so this isn't best practice
       
       map <- map |>
       group_by(metro_name, cbsa_code) |> #don't really need to be grouping by CBSA code here
@@ -922,7 +901,8 @@ merge_by_MSA <- function(county_map, region_fips){
         #cutoff = sum(cutoff, na.rm = T), #cutoff is almost always something that can be aggregated
         across(all_of(aggregate_cols), ~sum(.x, na.rm = T))
         ) |>
-      ungroup()
+      ungroup() |>
+        mutate(Value = if_else(Value == 0, NA, Value))
 
     
 map$centroid = st_centroid(map$geometry)
