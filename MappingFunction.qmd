@@ -11,12 +11,14 @@ library(ggplot2)
 library(sf)
 library(ggfx)
 library(ggrepel)
+library(grid)
 #TO DO:
 #map with per capita shading and bubbles for absolute count
 #aggregate county data by state and then use state map options
 ```
 #create_inset
 ```{r}
+#don't put top 10 if there are less than ten observations
 create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff, cutoff_column, dollar, unit, netmigration, logratio, scale_center, inset_title_custom, hide_values) {
   #people don't like inverted ratios, so maybe I don't need that option
   if(style == "top" & min(map$Value, na.rm = T) < 0){
@@ -58,6 +60,7 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
       rank = as.character(row_number()),
       rank = if_else(as.numeric(rank) < 10, paste0(rank, ".   "), paste0(rank, ". "))
     )
+  n = nrow(inset_data) #in case there are less than 10 observations (needed for some state maps)
   
   if(hide_values){
     inset_data <- inset_data |>
@@ -102,7 +105,7 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
   title_line =  paste0(if_else(style == "top", top, bottom), counties, 
                       if_else(inset_cutoff > 0, paste0(" (min ", shorten(inset_cutoff), " ", cutoff_column, ")"), ""), 
                       ":\n")
-  new_inset <- paste0(title_line, paste(inset_data$label, collapse = "\n"), "\n")
+  new_inset <- paste0(title_line, paste(inset_data$label, collapse = "\n"))
   
   return(new_inset)
 }
@@ -112,6 +115,7 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
 ```{r}
 #legend takes up too much space when it has to do color and size, covers up caption
 #having issues with high max_bubble_size (> ~30), but that may be unavoidable due to space constraints
+#when there are 5 choropleth breaks, it is all in one line and goes onto the inset
 add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag) {
   font = "Arial"
   
@@ -126,6 +130,16 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
   }
   subtitle_offset = 0.06*(font_size/36) # Vertical adjustment for subtitle
   if(continental){continental_offset = 0.14}else{continental_offset = 0}
+  
+  # For inset box
+  # Estimate text size dynamically
+  inset_font_size = 11.5
+  text_width <- grobWidth(textGrob(inset_text, gp = gpar(fontsize = inset_font_size))) * 1.05
+  text_height <- grobHeight(textGrob(inset_text, gp = gpar(fontsize = inset_font_size)))
+  
+  # Define x and y positions (make text align inside the box)
+  x_pos <- unit(if_else(continental, 0.53, 0.58), "npc")
+  y_pos <- unit(-0.14 - continental_offset, "npc")
   
   plot <- plot +
     theme_minimal(base_family = font) +
@@ -149,18 +163,49 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
       plot.margin = margin(0, if_else(continental, -20, -20), 0, if_else(continental, -20, -110))
     ) +
     coord_sf(clip = "off") +
-    annotation_custom(grid::textGrob(
+    annotation_custom(
+    grob = grobTree(gList(
+    #   roundrectGrob( # Shadow layer
+    # x = x_pos + unit(0.005, "npc"),
+    # y = y_pos - unit(0.005, "npc"),
+    # width = text_width,
+    # height = text_height,
+    # r = unit(0.02, "npc"),
+    # just = c("left", "bottom"),
+    # gp = gpar(fill = alpha("black", 0.2), col = NA)  # Semi-transparent shadow
+    #   ),
+      roundrectGrob(
+        x = x_pos - unit(0.01, "npc"), #-0.01 for padding
+        y = y_pos - unit(0.01, "npc"),
+        width = text_width + unit(0.02, "npc"),  # Add padding
+        height = text_height + unit(0.02, "npc"),  # Add padding
+        r = unit(0.06, "npc"),
+        just = c("left", "bottom"),
+        gp = gpar(fill = midpoint_rgb(palette$mid_color, palette$high_color, 0.7), col = "black", lwd = 2)
+      ),
+    textGrob(
       inset_text,
-      x = unit(if_else(continental, 0.52, 0.57), "npc"),
-      y = unit(-0.12 - continental_offset, "npc"),
-      hjust = 0,
-      vjust = 0,
-      gp = grid::gpar(
-        fontsize = 11,
+      x = x_pos,
+      y = y_pos,
+      just = c("left", "bottom"),
+      gp = gpar(
+        fontsize = inset_font_size,
         fontface = "bold",
-        col = palette$text_color, fontfamily = font
-      )
-    )) +
+        col = palette$text_color,
+        fontfamily = font)
+      )))) +
+#     annotation_custom(grid::textGrob(
+#   inset_text,
+#   x = unit(if_else(continental, 0.52, 0.57), "npc"),
+#   y = unit(-0.12 - continental_offset, "npc"),
+#   hjust = 0,
+#   vjust = 0,
+#   gp = grid::gpar(
+#     fontsize = 11,
+#     fontface = "bold",
+#     col = palette$text_color, fontfamily = font
+#   )
+# )) +
     annotation_custom(grid::textGrob(
       title,
       gp = grid::gpar(
@@ -229,20 +274,13 @@ handle_per <- function(map, source, per, subtitle, scale_factor) {
 #bubble_map
 ```{r}
 bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders, dollar, unit, region, netmigration, scale_center) {
-  #computes midpoint color
-  midpoint_rgb <- function(mid_color, saturated_color) {
-    col1 <- col2rgb(mid_color)
-    col2 <- col2rgb(saturated_color)
-    mid_rgb <- 0.7 * col1 + 0.3 * col2  # Biased the mix towards the mid_color so you can see the bubbles better
-    rgb(mid_rgb[1], mid_rgb[2], mid_rgb[3], maxColorValue = 255)
-  }
   
   if(!is.na(scale_center) & scale_center != 0){
     stop("Scale center not at 0 for bubbles makes no sense.")
   }
   
-  low_fill_color <- midpoint_rgb(palette$mid_color, palette$low_color)
-  high_fill_color <- midpoint_rgb(palette$mid_color, palette$high_color)
+  low_fill_color <- midpoint_rgb(palette$mid_color, palette$low_color, 0.7) #bias mix towards mid color
+  high_fill_color <- midpoint_rgb(palette$mid_color, palette$high_color, 0.7)
   
   map <- map |>
     mutate(Value = if_else(Value == 0 & is.na(scale_center), NA, Value),
@@ -491,6 +529,7 @@ map <- map |>
 
 ###map
 ```{r}
+#use type argument instead of bubbles, implement new mapping function for categorical variables?
 #put error handling in separate function?
 #trim aleutian islands off of alaska?
 #netmigration only really affects text for bubbles and inset, so get rid of it and just have custom text parameters
@@ -688,16 +727,7 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
   
     #better code has been written
   if(is.na(max_bubble_size) & bubbles){
-  map <- map |>
-    mutate(abs_value = abs(Value))
-  max = max(map$abs_value, na.rm = T)
-  bubble <- map |>
-    select(abs_value) |>
-    mutate(normalized_bubble_size = abs_value/max,
-           normalized_bubble_size = replace_na(normalized_bubble_size, 0))
-  inflation_factor = 3000/sum(bubble$normalized_bubble_size) #3000 was arrived at by trial and error, and doesn't work well for maps where the data is all clustered in one area
-  max_bubble_size = sqrt(max(bubble$normalized_bubble_size)*inflation_factor) #bubble size is in terms of radius not area
-  cat("Auto max bubble size: ", max_bubble_size, "\n")
+    max_bubble_size = auto_mbs(map)
   }
   if (bubbles) {
     plot <- bubble_map(map, state_map, level, max_bubble_size, palette, borders, dollar, unit, region, netmigration, scale_center)
@@ -723,7 +753,31 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
 
 #helper functions
 ```{r}
-compute_breaks <- function(values) { # This is for finding good bubble sizes for the legend
+auto_mbs = function(map){
+  map <- map |>
+    mutate(abs_value = abs(Value))
+  max = max(map$abs_value, na.rm = T)
+  bubble <- map |>
+    select(abs_value) |>
+    mutate(normalized_bubble_size = abs_value / max,
+           normalized_bubble_size = replace_na(normalized_bubble_size, 0))
+  inflation_factor = 3000 / sum(bubble$normalized_bubble_size) #3000 was arrived at by trial and error, and doesn't work well for maps where the data is all clustered in one area
+  max_bubble_size = sqrt(max(bubble$normalized_bubble_size) * inflation_factor) #bubble size is in terms of radius not area
+  cat("Auto max bubble size: ", max_bubble_size, "\n")
+  return(max_bubble_size)
+}
+#computes midpoint color
+midpoint_rgb <- function(color1, color2, weight1) {
+  if(weight1 < 0 | weight1 > 1){
+    stop("weight1 is the weighting on the first color and must be between 0 and 1.\n")
+  }
+    col1 <- col2rgb(color1)
+    col2 <- col2rgb(color2)
+    mid_rgb <- weight1 * col1 + (1-weight1) * col2  # Biased the mix towards the mid_color so you can see the bubbles better
+    rgb(mid_rgb[1], mid_rgb[2], mid_rgb[3], maxColorValue = 255)
+}
+# This is for finding good bubble sizes for the legend
+compute_breaks <- function(values) {
   max_value <- max(values, na.rm = TRUE)
   min_value <- max(min(values , na.rm = TRUE),1)
   
@@ -763,6 +817,7 @@ remove_empty_breaks <- function(map, breaks){
   
   return(adjusted_breaks)
 }
+# For nice-looking breakpoints for a cholorpleth legend (I usually hide endpoints now, but it's still good to have this functionality)
 round_to_sigfigs <- function(value, sigfigs, method = c("floor", "ceiling")) {
   method <- match.arg(method)
   if (value == 0) return(0)
@@ -811,7 +866,6 @@ set_palette <- function(user_palette) {
     "highlight_color" = "steelblue",
     "na_color" = "gray90"
   )
-  
   return(modifyList(default_palette, user_palette))
 }
 ```
@@ -819,7 +873,7 @@ set_palette <- function(user_palette) {
 #get_migration_data
 ```{r}
 get_migration_data <- function(data, region_fips, migration_type, logratio){
-  #maybe some of the migration stuff can happen outside of this file
+  #move migration-specific stuff outside this file
   #add option for gross migration
   
   #user supplies region_fips to specify a region, or none for total
@@ -891,7 +945,7 @@ merge_by_MSA <- function(county_map, region_fips){
     }
   
   #there may be a better way to do this
-      aggregate_cols = setdiff(colnames(map), c("fips", "county", "abbr", "state", "x", "y", "name", "geometry", "cbsa_code", "metro_name")) #this only works because I remove all column but fips and Value from the data fed into map(), but in the future, I may want to allow data to have other columns that do other things, so this isn't best practice
+      aggregate_cols = setdiff(colnames(map), c("fips", "county", "abbr", "state", "x", "y", "name", "geometry", "cbsa_code", "metro_name")) #this only works because I remove all columns but fips and Value from the data fed into map(), but in the future, I may want to allow data to have other columns that do other things, so this isn't best practice
       
       map <- map |>
       group_by(metro_name, cbsa_code) |> #don't really need to be grouping by CBSA code here
