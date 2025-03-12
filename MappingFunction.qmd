@@ -12,15 +12,14 @@ library(sf)
 library(ggfx)
 library(ggrepel)
 library(grid)
+library(colorspace)
 #TO DO:
 #map with per capita shading and bubbles for absolute count
 #aggregate county data by state and then use state map options
 ```
 #create_inset
 ```{r}
-#don't put top 10 if there are less than ten observations
-create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff, cutoff_column, dollar, unit, netmigration, logratio, scale_center, inset_title_custom, hide_values) {
-  #people don't like inverted ratios, so maybe I don't need that option
+create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels) {
   if(style == "top" & min(map$Value, na.rm = T) < 0){
     dollar = paste0("+",dollar)
   }
@@ -34,7 +33,6 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
                             T ~ name
                             ))
   }
-  
   inset_data <- map |>
     st_drop_geometry() |>
         filter(cutoff >= inset_cutoff,
@@ -75,39 +73,22 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
     #   mutate(invert = (Value < 1),
     #          Value = if_else(invert, 1/Value, Value),
     #     label = paste0(rank, name, ": ", dollar, if_else(invert, "1:",""),sapply(Value, shorten),if_else(invert,"", ":1"), unit))
-    if(level == "county"){
-        counties = "Counties"
-      }else if (level == "MSA") {
-        counties = "Counties/MSAs"
-      } else if(level == "state"){
-        counties = "States"
-      }
-    if (is.na(inset_title_custom)[1]) {
-      if (logratio) {
-        top = paste0("Highest ", n, " ")
-        bottom = paste0("Lowest ", n, " ")
-      } else if (!netmigration) {
-        top = paste0("Top ", n," ")
-        bottom = paste0("Bottom ", n," ")
-      } else{
-        top = "Highest Net In-Migration"
-        bottom = "Highest Net Out-Migration"
-        counties = "" #it would be too long
-      }
-    } else{
-      top = inset_title_custom[1]
-      bottom = inset_title_custom[2]
-      # Make sure top and bottom end in a space
-      top = if_else(str_detect(top, " $"), top , paste0(top, " "))
-      bottom = if_else(str_detect(bottom, " $"), bottom , paste0(bottom, " "))
-    }
   
-  title_line =  paste0(if_else(style == "top", top, bottom), counties, 
+areas = case_when(level == "county" ~ "Counties",
+                       level == "MSA" ~ "Counties/MSAs",
+                       level == "state" ~ "States")
+
+  topbottom = if_else(style == "top", inset_labels$top, inset_labels$bottom)
+    #using /n/ to insert n
+  topbottom = str_replace(topbottom, "/n/",as.character(n)) #Turn "Top /n/" into "Top 10" or "Bottom /n/" into "Bottom 5"
+  topbottom = if_else(str_detect(topbottom, " $"), topbottom , paste0(topbottom, " ")) # Make sure top/bottom ends in a space
+      
+  title_line =  paste0(topbottom, areas, 
                       if_else(inset_cutoff > 0, paste0(" (min ", shorten(inset_cutoff), " ", cutoff_column, ")"), ""), 
                       ":\n")
-  new_inset <- paste0(title_line, paste(inset_data$label, collapse = "\n"))
+  inset <- paste0(title_line, paste(inset_data$label, collapse = "\n"))
   
-  return(new_inset)
+  return(inset)
 }
 ```
 
@@ -115,7 +96,6 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
 ```{r}
 #legend takes up too much space when it has to do color and size, covers up caption
 #having issues with high max_bubble_size (> ~30), but that may be unavoidable due to space constraints
-#when there are 5 choropleth breaks, it is all in one line and goes onto the inset
 add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag) {
   font = "Arial"
   
@@ -132,9 +112,8 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
   if(continental){continental_offset = 0.14}else{continental_offset = 0}
   
   # For inset box
-  # Estimate text size dynamically
   inset_font_size = 11.5
-  text_width <- grobWidth(textGrob(inset_text, gp = gpar(fontsize = inset_font_size))) * 1.05
+  text_width <- grobWidth(textGrob(inset_text, gp = gpar(fontsize = inset_font_size))) * 1.05 # Estimate text size
   text_height <- grobHeight(textGrob(inset_text, gp = gpar(fontsize = inset_font_size)))
   
   # Define x and y positions (make text align inside the box)
@@ -162,26 +141,18 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
       legend.box.margin = margin(0, 0, 0, 0),
       plot.margin = margin(0, if_else(continental, -20, -20), 0, if_else(continental, -20, -110))
     ) +
+    guides(fill = guide_legend(nrow = ceiling(length(breaks)/3))) + # I could do 4 to a row depending on the length of the text associated with the breaks, but I'd rarely want more than 9 breaks, so this is good
     coord_sf(clip = "off") +
     annotation_custom(
     grob = grobTree(gList(
-    #   roundrectGrob( # Shadow layer
-    # x = x_pos + unit(0.005, "npc"),
-    # y = y_pos - unit(0.005, "npc"),
-    # width = text_width,
-    # height = text_height,
-    # r = unit(0.02, "npc"),
-    # just = c("left", "bottom"),
-    # gp = gpar(fill = alpha("black", 0.2), col = NA)  # Semi-transparent shadow
-    #   ),
       roundrectGrob(
         x = x_pos - unit(0.01, "npc"), #-0.01 for padding
         y = y_pos - unit(0.01, "npc"),
         width = text_width + unit(0.02, "npc"),  # Add padding
         height = text_height + unit(0.02, "npc"),  # Add padding
-        r = unit(0.06, "npc"),
+        r = unit(0.1, "npc"),
         just = c("left", "bottom"),
-        gp = gpar(fill = midpoint_rgb(palette$mid_color, palette$high_color, 0.7), col = "black", lwd = 2)
+        gp = gpar(fill = midpoint_rgb(palette$mid_color, palette$high_color, 0.7), col = palette$text_color, lwd = 2)
       ),
     textGrob(
       inset_text,
@@ -262,7 +233,7 @@ handle_per <- function(map, source, per, subtitle, scale_factor) {
   } else if (per == "acre") {
     map <- map |>
       mutate(Value = Value / (sqmi * 640))
-  } else if (per != "" & per != "year") {
+  } else if (per != "" & per != "year") { #I think somewhere earlier in the function I trim off everything but fips and Value from data, so this may not work anymore. I need to fix get_migration_data() to be more robust so I don't have to drop extra columns
     map <- map |>
       mutate(Value = Value / !!rlang::sym(per))
   }
@@ -273,7 +244,7 @@ handle_per <- function(map, source, per, subtitle, scale_factor) {
 
 #bubble_map
 ```{r}
-bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders, dollar, unit, region, netmigration, scale_center) {
+bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders, dollar, unit, region, scale_center, plusminus_labels) {
   
   if(!is.na(scale_center) & scale_center != 0){
     stop("Scale center not at 0 for bubbles makes no sense.")
@@ -292,12 +263,11 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
   if(is.na(scale_center)){
     map <- map |> 
       mutate(Type = ifelse(abs_value >= 0, "Has Value", "No Value"))
-  }else if(netmigration) {
-    map <- map |> 
-      mutate(Type = ifelse(Value >= 0, "Net In-Migration", "Net Out-Migration"))
   } else if(scale_center == 0){
+    pos = plusminus_labels$pos
+    neg = plusminus_labels$neg
     map <- map |> 
-      mutate(Type = ifelse(Value >= 0, "Positive", "Negative"))
+      mutate(Type = ifelse(Value >= 0, pos, neg))
   }
   
     plot <- ggplot(data = map) +
@@ -322,7 +292,7 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
     scale_size_continuous(
       range = c(min_bubble_size, max_bubble_size),
       name = "",
-      breaks = compute_breaks(map$abs_value),
+      breaks = compute_bubble_breaks(map$abs_value),
       labels = append_unit(dollar, unit)
     ) + 
     geom_point(
@@ -343,27 +313,20 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
       na.value = palette$na_color) +
       scale_color_manual(
         values = c("Has Value" = palette$high_color), na.translate = FALSE)
-  } else if(netmigration){
-    plot <- plot +
-      scale_fill_manual(
-      values = c("Net In-Migration" = high_fill_color, "Net Out-Migration" = low_fill_color),
-      na.value = palette$na_color) +
-      scale_color_manual(
-        values = c("Net In-Migration" = palette$high_color, "Net Out-Migration" = palette$low_color), na.translate = FALSE)
   } else if(scale_center == 0){
     plot <- plot +
       scale_fill_manual(
-      values = c("Positive" = high_fill_color, "Negative" = low_fill_color),
+      values = c(pos = high_fill_color, neg = low_fill_color),
       na.value = palette$na_color) +
       scale_color_manual(
-        values = c("Positive" = palette$high_color, "Negative" = palette$low_color), na.translate = FALSE)
+        values = c(pos = palette$high_color, neg = palette$low_color), na.translate = FALSE)
   }
     
   if(is.na(scale_center)){
     plot <- plot +
       guides(color = "none", size = guide_legend(override.aes = list(color = palette$high_color)))
   }else if (scale_center == 0) {
-    max_break <- max(compute_breaks(map$Value))
+    max_break <- max(compute_bubble_breaks(map$Value))
     max_value <- max(map$Value, na.rm = TRUE)
     legend_bubble_size <- max_bubble_size * sqrt(max_break / max_value)
     plot <- plot + guides(color = guide_legend(override.aes = list(size = legend_bubble_size)))
@@ -374,7 +337,6 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
 
 #choropleth_map
 ```{r}
-#auto-breaks: find powers 10 times 1, 2, and 5 closest to 0.25, 0.5, 0.75, 0.9, 0.95 quantiles?
 #figure out how to dynamically set text to a lighter color if the fill is dark for state level map
 choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, dollar, unit, region, scale_center, logratio, show_endpoints) {
   
@@ -396,23 +358,23 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
         map <- map |>
           mutate(Value = exp(Value))
       }
-      breaks <- c(round_to_sigfigs(min(map$Value, na.rm = TRUE), 2, "floor"),
-                  breaks,
-                  round_to_sigfigs(max(map$Value, na.rm = TRUE), 2, "ceiling"))
-    } else {
+
+    }
+      breaks = breaks[breaks < max(map$Value, na.rm = TRUE)] #take out breaks above max value
+      breaks = breaks[breaks > min(map$Value, na.rm = TRUE)] #take out breaks below min value
       breaks <- c(round_to_sigfigs(min(map$Value, na.rm = TRUE), 2, "floor"),
                   breaks,
                   round_to_sigfigs(max(map$Value, na.rm = TRUE), 2, "ceiling"))
     
       breaks <- sort(breaks)
-  }
     
   } else{
     num_data_points = map |>
       filter(!is.na(Value), Value != 0) |>
       nrow()
     num_breaks = max(4, min(7, ceiling(num_data_points^0.5)))
-    breaks = pretty(map$Value, n = num_breaks) #is there a way to keep 0 from being a break while keeping the breaks the same size? Not really a fan of pretty(), might make my own auto-breaks
+    breaks = compute_breaks(map$Value, 6) #only works for positive values, still a work in progress
+    #breaks = pretty(map$Value, n = num_breaks) #is there a way to keep 0 from being a break while keeping the breaks the same size? Not really a fan of pretty(), might make my own auto-breaks
   }
   
   if(is.na(scale_center)){ #I don't have code to remove empty breaks for two-sided because I don't want asymmetrical breaks so it'd be more complicated
@@ -434,28 +396,27 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
         formatted_labels <- labels_manual
       }
   map <- map |>
-      mutate(Category = cut(
+      mutate(bin = cut(
         Value,
         breaks = breaks,
         include.lowest = TRUE,
         labels = formatted_labels
       ))
-    color_column = "Category"
     if(!is.na(scale_center)){
       #length(breaks) should be even
       low_palette <- seq_gradient_pal(palette$low_color, palette$mid_color)(seq(0, 1, length.out = length(breaks)/2))
       high_palette <- seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0, 1, length.out = length(breaks)/2))
-      color_palette <- c(low_palette[-length(low_palette)], high_palette)
+      bin_palette <- c(low_palette[-length(low_palette)], high_palette)
     }else{
-      color_palette <- seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0, 1, length.out = length(breaks) - 1))
+      bin_palette <- seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0, 1, length.out = length(breaks) - 1))
     }
   
   plot <- ggplot(data = map) + 
       with_shadow(
-        geom_sf(aes(fill = Category), color = ifelse(borders, "white", NA), size = 0.1),
+        geom_sf(aes(fill = bin), color = ifelse(borders, "white", NA), size = 0.1),
         x_offset = 3, y_offset = 3, sigma = 3, color = "grey70"
       ) + scale_fill_manual(
-      values = color_palette,
+      values = bin_palette,
       na.value = palette$na_color,
       name = "",
       na.translate = TRUE,
@@ -465,9 +426,22 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
         plot <- plot +
       geom_sf(data = state_map, color = "black", fill = NA, size = 0.1) #can't seem to make borders bold no matter how high I make the size
     }
+
+
   
   if(level == "state"){
-  plot = add_state_labels(plot, map, palette)
+    
+    label_to_color <- tibble::tibble(bin = formatted_labels, bin_color = bin_palette)
+    
+    map <- map %>%
+      left_join(label_to_color) %>%
+      mutate(
+        bin_color = replace_na(bin_color, palette$na_color),
+        brightness = map_chr(bin_color,  ~ calculate_brightness(.x)),
+        text_color = if_else(brightness > 0.5, palette$text_color, "white")
+      )
+    
+  plot = add_state_labels(plot, map, palette) #dynamically set text color based on color of corresponding state (for states that don't have external label)
   }
   
   if(!is.na(region)){
@@ -484,13 +458,14 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
 
 #add_state_labels
 ```{r}
+#need external label for MD
 add_state_labels <- function(plot, map, palette){
       #yes this is a mess but it works for now.
 
     adjustments <- tibble::tibble( #these adjustments are needed for labels but aren't good bubble locations
-  abbr = c("NH", "MA", "CT"),
-  x_adj = c(0, 50000, -35000),
-  y_adj = c(90000, 0, -30000)
+  abbr = c("NH", "MA", "CT", "NJ","MD", "RI", "DE"),
+  x_adj = c(0, 50000, -35000, 0, -40000, 15000, 0),
+  y_adj = c(90000, 0, -30000,40000, 0, 10000, 0)
 )
 
 map <- map |>
@@ -501,7 +476,8 @@ map <- map |>
   ) |>
   select(-x_adj, -y_adj)
 
-      plot <- plot + geom_text(data = map %>% filter(!(abbr %in% c( "DC","DE", "RI", "NJ", "HI", "VT", "CT", "MA", "NH"))), aes(x = x, y = y, label = lapply(Value, shorten)), size = 4, fontface = "bold", color = palette$text_color) +
+      plot <- plot + geom_text(data = map %>% filter(!(abbr %in% c( "DC","DE", "RI", "NJ", "HI", "VT", "CT", "MA", "NH"))), aes(x = x, y = y, label = lapply(Value, shorten), color = text_color), size = 4, fontface = "bold") +
+        scale_color_identity() +
   geom_text_repel(data = map %>% filter(abbr %in% c("DE", "HI")),
                            aes(x = x, y = y, label = lapply(Value, shorten)),
                            box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100) +
@@ -533,7 +509,7 @@ map <- map |>
 #put error handling in separate function?
 #trim aleutian islands off of alaska?
 #netmigration only really affects text for bubbles and inset, so get rid of it and just have custom text parameters
-map <- function(data, map, state_map = NULL, title, source, font_size = NA, years = NA, bubbles = TRUE, unit = "", per = "", max_bubble_size = NA, continental = FALSE, borders = FALSE, graphicspath, palette = list(), inset_cutoff = -1000000000, cutoff_column = "Value", breaks = NA, na_to_0 = FALSE, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, cbsa = NA, migration_type = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, netmigration = F, inset_title_custom = NA, dpi = 300, show_endpoints = F, hide_values = F, tag = T) {
+map <- function(data, map, state_map = NULL, title, source, font_size = NA, years = NA, bubbles = TRUE, unit = "", per = "", max_bubble_size = NA, continental = FALSE, borders = FALSE, graphicspath, palette = list(), inset_cutoff = -1000000000, cutoff_column = "Value", breaks = NA, na_to_0 = FALSE, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, cbsa = NA, migration_type = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list("pos" = "Positive", "neg" = "Negative"), inset_labels = list("top" = "Top /n/", "bottom" = "Bottom /n/")) {
   
   palette = set_palette(palette)
   
@@ -577,8 +553,9 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
   }
   if(!is.na(migration_type)){
     if(migration_type == "net"){
+      plusminus_labels = list("pos" = "Net In-Migration", "neg" = "Net Out-Migration")
+      inset_labels = list("top" = "/n/ Highest Net In-Migration", "bottom" = "/n/ Highest Net Out-Migration")
       scale_center = 0
-      netmigration = T
     }
     data = get_migration_data(data, region_fips, migration_type, logratio)
   }
@@ -701,10 +678,10 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
   if (inset_style == "hidden") {
     inset_text <- ""
   } else if (inset_style %in% c("top", "bottom")) {
-    inset_text <- create_inset(map, level, inset_style, 10, inset_cutoff, cutoff_column, dollar, unit, netmigration, logratio, scale_center, inset_title_custom, hide_values)
+    inset_text <- create_inset(map, level, inset_style, 10, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels)
   } else if (inset_style == "split") {
-    top <- create_inset(map, level, "top", 5, inset_cutoff, cutoff_column, dollar, unit, netmigration, logratio, scale_center, inset_title_custom, hide_values)
-    bottom <- create_inset(map, level, "bottom", 5, inset_cutoff, cutoff_column, dollar, unit, netmigration, logratio, scale_center, inset_title_custom)
+    top <- create_inset(map, level, "top", 5, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels)
+    bottom <- create_inset(map, level, "bottom", 5, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, inset_labels)
     inset_text = paste0(top, bottom, hide_values)
   }
   
@@ -730,7 +707,7 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
     max_bubble_size = auto_mbs(map)
   }
   if (bubbles) {
-    plot <- bubble_map(map, state_map, level, max_bubble_size, palette, borders, dollar, unit, region, netmigration, scale_center)
+    plot <- bubble_map(map, state_map, level, max_bubble_size, palette, borders, dollar, unit, region, scale_center, plusminus_labels)
   } else {
     choropleth <- choropleth_map(map, state_map, level, breaks, labels_manual, palette, borders, dollar, unit, region, scale_center, logratio, show_endpoints)
     plot = choropleth$plot
@@ -776,8 +753,11 @@ midpoint_rgb <- function(color1, color2, weight1) {
     mid_rgb <- weight1 * col1 + (1-weight1) * col2  # Biased the mix towards the mid_color so you can see the bubbles better
     rgb(mid_rgb[1], mid_rgb[2], mid_rgb[3], maxColorValue = 255)
 }
-# This is for finding good bubble sizes for the legend
-compute_breaks <- function(values) {
+calculate_brightness <- function(color) {
+  rgb_values <- col2rgb(color) / 255  # Normalize RGB values to [0,1]
+  return(0.299 * rgb_values[1] + 0.587 * rgb_values[2] + 0.114 * rgb_values[3])  # Brightness formula
+}
+compute_bubble_breaks <- function(values) { # This is for finding good bubble sizes for the legend
   max_value <- max(values, na.rm = TRUE)
   min_value <- max(min(values , na.rm = TRUE),1)
   
@@ -794,6 +774,21 @@ compute_breaks <- function(values) {
   if (length(breaks) > 4) {
     breaks <- tail(breaks, 4) # No more than 4 bubbles in legend
   }
+  return(breaks)
+}
+compute_breaks <- function(values, n){
+  max_value <- max(values, na.rm = TRUE)
+  min_value <- max(min(values , na.rm = TRUE), 0.00001)
+  powers_of_10 <- 10^(floor(log10(min_value)):floor(log10(max_value)))
+  potential_breaks = c(powers_of_10, 2*powers_of_10, 5*powers_of_10)
+  potential_breaks = potential_breaks[potential_breaks < max_value] #take out breaks above max value
+  potential_breaks = potential_breaks[potential_breaks > min_value] #take out breaks below min value
+  #maybe something where if only one observation is in the top break, then drop it
+  breaks <- sort(unique(potential_breaks))
+  breaks = tail(breaks, n-1)
+  breaks = c(round_to_sigfigs(min(values, na.rm = TRUE), 2, "floor"),
+                  breaks,
+                  round_to_sigfigs(max(values, na.rm = TRUE), 2, "ceiling"))
   return(breaks)
 }
 remove_empty_breaks <- function(map, breaks){
