@@ -1,0 +1,573 @@
+---
+title: "Meta"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(readr)
+library(stats)
+library(scales)
+wd = "/Users/Hayden/Maps/"
+datapath_meta = paste0(wd, "Data/Meta/")
+graphicspath_meta = paste0(wd, "Maps/Meta/")
+#read_table
+data = read.table(paste0(datapath_meta, "county_county.tsv"), sep = '\t', header = TRUE)
+
+data = data |>
+  mutate(user_loc = sprintf("%05d", user_loc),
+         fr_loc = sprintf("%05d", fr_loc)) |>
+  filter(as.numeric(user_loc)< 57000,
+         as.numeric(fr_loc)< 57000)
+
+#fixing two missing FIPS codes in Alaska
+ak_user = data |>
+  filter(user_loc == "02261")
+ak_fr = data |>
+  filter(fr_loc == "02261")
+
+data  = rbind(data, ak_user |> mutate(user_loc = "02063", fr_loc = if_else(fr_loc == "02261", "02063", fr_loc))) #Chugach
+data  = rbind(data, ak_user |> mutate(user_loc = "02066", fr_loc = if_else(fr_loc == "02261", "02066", fr_loc))) #Copper River
+data  = rbind(data, ak_fr |> mutate(fr_loc = "02063")) #Chugach
+data  = rbind(data, ak_fr |> mutate(fr_loc = "02066")) #Copper River
+
+rm(ak_fr)
+rm(ak_user)
+
+data <- data |>
+  filter(user_loc != "02261",
+         fr_loc != "02261")
+```
+
+```{r}
+#select FIPS by county name 
+county_name = "Bronx County, NY"
+FIPS = county_map |> filter(name == county_name) |> pull(fips)
+#...or manually
+# FIPS = "17031"
+# county_name = county_map |>
+#   filter(fips == FIPS) |>
+#   st_drop_geometry() |>
+#   pull(name)
+#-------------------
+county_data = data |> 
+  filter(user_loc == FIPS) |> #switched to not filtering out reference FIPS so that 'No Data' doesn't show up in the legend #fr_loc != FIPS
+    rename(fips = fr_loc)
+
+#METHOD 1
+#brackets by cumulative sum of population
+map_data = county_data |>
+  left_join(county_map) |>
+  mutate(pop = if_else(fips == FIPS, 0, pop)) |> #so own county doesn't count towards pop
+  filter(!is.na(pop)) |>
+  arrange(scaled_sci) |>
+  mutate(Value = cumsum(pop)/sum(pop, na.rm = T),
+         Value = if_else(fips == FIPS, 0.5, Value)) |> #just so own county doesn't show up in inset 
+  select(fips, Value) |>
+  st_drop_geometry()
+
+map(
+  data = map_data,
+  map = county_map |> filter(fips != "15005"), #get rid of Kalawao County because we don't have data for it
+  state_map = state_map,
+  graphicspath = graphicspath_meta,
+  title = paste0("Facebook Friendship Data For ", county_name),
+  subtitle = "Measured in Percentile",
+  source = "", 
+  bubbles = F,
+  palette = list("high_color" = "royalblue",
+                 "mid_color" = "beige",
+                 "low_color" = "#CC5500",
+                 "na_color" = "tan",
+                 "highlight_color" = "forestgreen"),
+  region_fips = FIPS,
+  breaks = c(10,30,48), #figure out better breaks, maybe asymmetrical?
+  scale_center = 50,
+  scale_factor = 100,
+  inset_cutoff = 100000,
+  cutoff_column = "pop",
+  inset_style = "top",
+  hide_values = T
+)
+
+#METHOD 2
+#divide by max
+#the max will always be within-county and that max will be lower for larger counties
+
+# county_data = county_data |>
+#   filter(fips != FIPS)
+max = max(county_data$scaled_sci)
+map_data = county_data |>
+  mutate(Value = scaled_sci/max,
+         Value = if_else(fips == FIPS, 0, Value))
+#more populated counties generate darker maps for this one
+map(
+  data = map_data,
+  map = county_map |> filter(fips != "15005"), #get rid of Kalawao County because we don't have data for it
+  state_map = state_map,
+  graphicspath = graphicspath_meta,
+  title = paste0("Facebook Friendship Data For ", county_name),
+  subtitle = "Rate of Friendship Relative to Within-County", #check the methodology to see if this is right
+  source = "", 
+  bubbles = F,
+  palette = list("high_color" = "royalblue",
+                 "mid_color" = "beige",
+                 "low_color" = "#CC5500",
+                 "na_color" = "tan",
+                 "highlight_color" = "forestgreen"),
+  region_fips = FIPS,
+  breaks = c(0.1,0.2,0.5,1,2,5,10), #if highest break gets dropped, highest break won't have greater than sign
+  # breaks = c(0.5,1,2,5,10,20),
+  inset_cutoff = 100000,
+  cutoff_column = "pop",
+  inset_style = "top",
+  unit = "%"
+)
+#Ideas/notes:
+#population-weighted maps by MSA > could be difficult and data aren't that noisy so it might not add much
+#inset could show furthest away counties above some cutoff
+#still need to work on getting PR into inset without messing up county_map
+
+#ideas for maps: college towns, military bases, ski towns
+#state lines seem very visible even for non-college towns
+#college towns definitely have higher connectedness with eachother than would be expected based on distance
+```
+
+```{r}
+# Look at average distance of friends (I think I could calculate this from the data)
+```
+
+```{r}
+#use gravity model to estimate elasticity (via NLS) but use polynomial in place of single exponent to account for nonconstant elasticity, include instate dummy
+```
+
+```{r}
+library(cluster)
+library(sf)
+library(igraph)
+
+create_cluster_plot <- function(cluster_map, statelines = F){
+  plot <- ggplot(cluster_map) +
+    geom_sf(aes(fill = factor(color)), color = "black")
+  if(statelines){
+    plot <- plot +
+      geom_sf(data = state_map, color = "black", fill = NA, size = 0.1)
+  }
+    plot <- plot +
+    scale_fill_manual(values = color_palette) +
+    theme_minimal(base_family = font) +
+    theme(
+      legend.title = element_blank(),
+      legend.text = element_blank(),
+      legend.position = c(0.551, 0),
+      legend.justification = "left",
+      legend.direction = "horizontal",
+      legend.key.width = unit(0, "cm"),
+      legend.key.height = unit(0, "cm"),
+      panel.grid = element_blank(),
+      panel.background = element_rect(fill = "#f1e0cf", color = NA), # #f1e0cf
+      plot.background = element_rect(fill = "#f1e0cf", color = NA),
+      axis.title = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      legend.box.margin = margin(0, 0, 0, 0),
+      plot.margin = margin(0, -20, 0, -110)
+    ) +
+    coord_sf(clip = "off") +
+        annotation_custom(grid::textGrob(
+      "Clustering Based on Facebook Friendship Data",
+      gp = grid::gpar(
+        fontsize = 30,
+        fontface = "bold",
+        col = "#363c45", fontfamily = font
+      ),
+      x = unit(0.551, "npc"),
+      y = unit(title_height, "npc"),
+      hjust = 0.5
+    )) +
+    annotation_custom(grid::textGrob(
+      "@hdk_maps",
+      gp = grid::gpar(fontsize = 12, col = "#363c45", fontface = "bold", fontfamily = font),
+      x = unit(0.551, "npc"),
+      y = unit(title_height - 0.09, "npc"),
+      hjust = 0.5
+     )) +
+      annotation_custom(grid::textGrob(
+        paste0("k=",k),
+        gp = grid::gpar(fontsize = 20, col = "#363c45", fontface = "bold", fontfamily = font),
+        x = unit(0.551, "npc"),
+        y = unit(title_height - 0.05, "npc"),
+        hjust = 0.5
+      )) +
+    annotation_custom(grid::textGrob(
+      "Created in R",
+      gp = grid::gpar(fontsize = 10, col = "#363c45", fontfamily = font),
+      x = unit(0.128, "npc"),
+      y = unit(-0.15, "npc"),
+      hjust = 0,
+      vjust = 0
+    ))
+}
+
+dist_matrix <- data %>%
+  mutate(scaled_sci = 1000000/scaled_sci) |>
+  pivot_wider(names_from = fr_loc, values_from = scaled_sci, values_fill = 1000000/39390539) %>% #the only missing entries are for alaska fips 02261, replacing them with 02261's in-county
+  column_to_rownames(var = "user_loc") %>%
+  as.matrix()
+
+dist_matrix <- as.dist(dist_matrix)
+
+hc <- hclust(dist_matrix, method = "ward.D2")
+# Methods (non-exhaustive):
+# ward.D2
+# complete creates a lot of disjoint clusters
+# average is a combination of single which is terrible and complete which is bad
+# mcquitty
+
+#reddit post: alternative methods of clustering the US into 100 social networks using Facebook friendship data
+
+color_palette <- c("#1E87E5", "#004D40", "#FFB701", "#AF0542", "#CC5500") #fifth color in case there are disjoint regions
+font = "Arial"
+title_height = 1.05
+
+for(k in c(150,200,250)){#c(2:10,15,20,25,30,35,40,45,50,60,70,80,90,100)
+
+  clusters <- cutree(hc, k = k)
+  cluster_map = county_map |> filter(fips != "15005") #get rid of Kalawao County because we don't have data for it
+  cluster_map$cluster <- clusters[cluster_map$fips]
+
+  cluster_map <- cluster_map %>%
+  group_by(cluster) %>%
+  summarize(
+    geometry = st_union(geometry),
+    abbr = if (n_distinct(abbr) == 1) first(abbr) else "",
+    .groups = "drop"
+  )
+
+  nb <- st_intersects(cluster_map, cluster_map, sparse = TRUE)
+  g <- graph_from_adj_list(nb)
+
+  coloring <- greedy_vertex_coloring(g, heuristic = "dsatur")
+
+  # Ensure colors are assigned correctly from a fixed palette
+  unique_colors <- sort(unique(coloring))  # Get unique color assignments (this should just be c(1,2,3,4))
+  
+  ak_cluster <- unique(cluster_map$cluster[cluster_map$abbr == "AK"])
+  hi_cluster <- unique(cluster_map$cluster[cluster_map$abbr == "HI"])
+  
+  cluster_map$color <- as.factor(coloring)
+  
+  #ensure AK and HI have different colors
+if (length(ak_cluster) == 1) {
+  cluster_map <- cluster_map |>
+    mutate(color = if_else(abbr == "AK", "3", color))
+}
+
+if (length(hi_cluster) == 1) {
+  cluster_map <- cluster_map |>
+    mutate(color = if_else(abbr == "HI", "4", color))
+}
+
+  plot = create_cluster_plot(cluster_map, statelines = T)
+  
+filepath = paste0(graphicspath_meta, "k=",k, ".jpg")
+ggsave(filename = filepath, plot = plot, dpi = 300, width = 10, height = 10)
+
+}
+```
+
+```{r}
+# Code for making a gif (regions inherit colors from the previous frame, white regions are the new ones)
+assign_colors_to_new_regions <- function(cluster_map, color_palette) {
+  # Identify new regions (those with NA in the color column)
+  new_regions <- is.na(cluster_map$color)
+  cluster_map$new = is.na(cluster_map$color)
+
+  # Get adjacency list for all regions
+  nb <- st_intersects(cluster_map, sparse = TRUE)
+
+  # Assign colors to new regions
+  for (i in which(new_regions)) {
+    # Get adjacent regions for the current new region
+    adjacent_regions <- nb[[i]]
+
+    # Get colors of adjacent regions (excluding NAs)
+    adjacent_colors <- cluster_map$color[adjacent_regions]
+    adjacent_colors <- adjacent_colors[!is.na(adjacent_colors)]
+
+    # Find the first available color that is not used by adjacent regions
+    available_colors <- setdiff(color_palette, adjacent_colors)
+    if (length(available_colors) > 0) {
+      cluster_map$color[i] <- sample(available_colors, 1)
+    } else {
+      #cluster_map$color[i] <- sample(color_palette, 1)
+      stop("No colors available.")
+    }
+  }
+
+  return(cluster_map)
+}
+
+
+color_palette <- c("#1E87E5", "#004D40", "#FFB701", "#AF0542","#CC5500", "#8602ab")
+font <- "Arial"
+title_height <- 1.05
+
+dist_matrix <- data %>%
+  mutate(scaled_sci = 1000000/scaled_sci) |>
+  pivot_wider(names_from = fr_loc, values_from = scaled_sci, values_fill = 1000000/39390539) |> #the only missing entries are for alaska fips 02261, replacing them with 02261's in-county
+  column_to_rownames(var = "user_loc") |>
+  as.matrix()
+
+dist_matrix <- as.dist(dist_matrix)
+
+hc <- hclust(dist_matrix, method = "mcquitty")
+
+cluster_map_kminus1 <- NULL
+for (k in c(75,100)) {
+  clusters <- cutree(hc, k = k)
+  cluster_map <- county_map |> filter(fips != "15005")  # Remove Kalawao County because there is no data for it
+  cluster_map$cluster <- clusters[cluster_map$fips]
+  
+  cluster_map <- cluster_map %>%
+    group_by(cluster) %>%
+    summarize(
+      geometry = st_union(geometry),
+      abbr = if (n_distinct(abbr) == 1) first(abbr) else "",
+      .groups = "drop"
+    )
+  
+  # Match geometries with previous cluster map (if it exists)
+  if (!is.null(cluster_map_kminus1)) {
+    matches <- st_equals(cluster_map, cluster_map_kminus1, sparse = FALSE)
+    matching_indices <- apply(matches, 1, function(x) if (any(x)) which(x) else NA)
+    cluster_map$color <- ifelse(is.na(matching_indices), NA, cluster_map_kminus1$color[matching_indices])
+  } else {
+    cluster_map$color <- NA  # No previous map, so all regions are new
+  }
+  
+  # Assign colors to new regions, ensuring no conflicts with adjacent regions
+  cluster_map <- assign_colors_to_new_regions(cluster_map, color_palette)
+  
+    ak_cluster <- unique(cluster_map$cluster[cluster_map$abbr == "AK"])
+  hi_cluster <- unique(cluster_map$cluster[cluster_map$abbr == "HI"])
+  
+  #ensure AK and HI have different colors
+if (length(ak_cluster) == 1) {
+  cluster_map <- cluster_map |>
+    mutate(color = if_else(abbr == "AK", "#1E87E5", color))
+}
+
+if (length(hi_cluster) == 1) {
+  cluster_map <- cluster_map |>
+    mutate(color = if_else(abbr == "HI", "#AF0542", color))
+}
+  
+  cluster_map<-cluster_map |>
+    mutate(display_color = if_else(new, "white",color))
+  
+  cluster_map_kminus1 <- cluster_map
+  
+plot = create_cluster_plot(cluster_map, statelines = F)
+
+  filepath = paste0(graphicspath_meta, "k=",k, ".png")
+ggsave(filename = filepath, plot = plot, dpi = 200, width = 10, height = 10, device = "png")
+}
+  cluster_map_kminus1$display_color = cluster_map_kminus1$color
+  
+plot = create_plot(cluster_map_kminus1)
+
+filepath_final = paste0(graphicspath_meta,"final.png")
+ggsave(filename = filepath_final, plot = plot, dpi = 200, width = 10, height = 10, device = "png")
+
+# library(gifski)
+# images <- c()
+# for (k in 2:50) {
+#   filepath <- file.path(str_remove(graphicspath_meta, "/$"), paste0("k=", k, ".png"))
+#   if (file.exists(filepath)) {
+#     images <- c(images, filepath)
+#   }
+# }
+# images = c(images, filepath_final, filepath_final, filepath_final, filepath_final, filepath_final, filepath_final, filepath_final, filepath_final,  filepath_final, filepath_final) #most busted way to have the final frame stay for 10 seconds
+# 
+# # Generate the GIF with custom delays
+# gifski(images, gif_file = "clustering.gif", width = 2000, height = 2000, delay = 1)
+#gif doesn't seem to be stopping at the last image for ten seconds, maybe just use delay=1 and repeat the image 10 times
+```
+
+###2024 Presidential Election With New Boundaries
+
+#hypothetical electoral college for cluster map
+```{r}
+library(patchwork)
+# Create k=50 cluster_map un-aggregated by county
+# This code should work with higher k as well. The threshold to win would be higher due to more Senators, but everything should still work and make sense
+  hc <- hclust(dist_matrix, method = "mcquitty")
+  k=50
+  clusters <- cutree(hc, k = k)
+  cluster_map = county_map |> filter(fips != "15005") #get rid of Kalawao County because we don't have data for it
+  cluster_map$cluster <- clusters[cluster_map$fips]
+
+  HOUSE_VOTES = 435
+
+  populations = cluster_map |>
+    filter(abbr != "DC") |> #remove DC
+    group_by(cluster) |>
+    summarize(population = sum(pop, na.rm = T)) |>
+    mutate(current_votes = 1, # Start with 1 House vote
+           priority_value = population / sqrt(current_votes * (current_votes + 1)))  # Compute first priority value
+  remaining_votes = HOUSE_VOTES - nrow(populations) #house votes - number of states who each got an initial vote
+  for (i in seq_len(remaining_votes)) {
+    
+    # Find state with the highest priority value
+    max_priority_index <- which.max(populations$priority_value)
+    
+    # Assign an additional House vote to that state
+    populations$current_votes[max_priority_index] <- populations$current_votes[max_priority_index] + 1
+    
+    # Recalculate the priority value for that state
+    populations$priority_value[max_priority_index] <- populations$population[max_priority_index] /
+      sqrt(populations$current_votes[max_priority_index] * (populations$current_votes[max_priority_index] + 1))
+  }
+  
+  populations <- populations %>%
+    mutate(electoral_votes = current_votes + 2) |> # Add 2 Senate votes
+    select(cluster, electoral_votes) |>
+    st_drop_geometry()
+  
+  DC = data.frame(cluster = 999,
+                  electoral_votes = 3)
+  
+  populations = rbind(populations, DC)
+  
+  election_data = read_csv("https://raw.githubusercontent.com/tonmcg/US_County_Level_Election_Results_08-24/refs/heads/master/2024_US_County_Level_Presidential_Results.csv")
+  #AK results will be missing because they are reported by house district. Since AK clusters together, we can just group it together 
+  
+  ak = election_data |> 
+    filter(state_name == "Alaska") |>
+    summarize(votes_gop = sum(votes_gop),
+              votes_dem = sum(votes_dem))
+  ak$fips = "02020" # Assign all of Alaska's votes to Anchorage
+  election_data = election_data |>
+    filter(state_name != "Alaska") |>
+    select(votes_gop, votes_dem, county_fips) |>
+    rename(fips = county_fips) |>
+    rbind(ak)
+  
+  cluster_map = cluster_map |>
+    left_join(election_data)
+
+  cluster_map <- cluster_map |>
+    mutate(cluster = if_else(abbr == "DC", 999, cluster)) |>
+    group_by(cluster) |>
+    summarize(
+      geometry = st_union(geometry),
+      votes_gop = sum(votes_gop, na.rm = T),
+      votes_dem = sum(votes_dem, na.rm = T)
+    ) |>
+    mutate(gop_pct = 100*votes_gop / (votes_gop + votes_dem),
+           candidate = if_else(gop_pct > 50, "Trump", "Harris"),
+           vote = if_else(gop_pct > 50, "Republican", "Democrat"))
+  cluster_map = left_join(cluster_map, populations)
+  
+cluster_map = cluster_map |>
+  mutate(centroid = st_centroid(geometry),
+         centroid_x = st_coordinates(centroid)[, 1], # Longitude
+         centroid_y = st_coordinates(centroid)[, 2]) # Latitude
+  electoral_map <- ggplot(data = cluster_map) +
+  geom_sf(aes(fill = candidate), color = "black", size = 0.5) + 
+   scale_fill_manual(values = c("Harris" = "blue", "Trump" = "red"), name = "Candidate") +
+  labs(title = paste0("2024 Presidential Election with State Lines Redrawn"),
+       subtitle = "@hdk_maps",
+       caption = "Based on hierarchical clustering using Facebook data\nCreated in R") +
+  theme_minimal(base_size = 8) +
+  theme(
+    plot.title = element_text(size = 24, face = "bold", color = "darkblue"),
+    plot.subtitle = element_text(size = 12, color = "darkblue"),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    panel.grid = element_blank(),
+    axis.title = element_blank(), 
+    axis.text = element_blank(),
+    axis.ticks = element_blank(), 
+    plot.caption = element_text(size = 8, color = "gray60"),
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 12, face = "bold"),
+    plot.background = element_rect(fill = "white", color = "white")
+  )+
+    geom_text(data = cluster_map |> filter(cluster != 999), aes(x = centroid_x, y = centroid_y, label = electoral_votes), size = 4, fontface = "bold", color = "white")
+  
+  # Alternate version with shading based on margin
+  vote_map <- ggplot(data = cluster_map) +
+  geom_sf(aes(fill = gop_pct), color = "black", size = 0.5) + 
+    scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 50,
+    name = "GOP Vote %"
+  ) +
+  labs(title = paste0("2024 Presidential Election with State Lines Redrawn"),
+       subtitle = "@hdk_maps",
+       caption = "Based on hierarchical clustering using Facebook data\nCreated in R") +
+  theme_minimal(base_size = 8) +
+  theme(
+    plot.title = element_text(size = 24, face = "bold", color = "darkblue"),
+    plot.subtitle = element_text(size = 12, color = "darkblue"),
+    legend.position = "bottom", 
+    legend.box = "horizontal",  
+    legend.key.width = unit(1, "in"),
+    panel.grid = element_blank(),
+    axis.title = element_blank(), 
+    axis.text = element_blank(),    
+    axis.ticks = element_blank(), 
+    plot.caption = element_text(size = 8, color = "gray60"),
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 12, face = "bold"),
+    plot.background = element_rect(fill = "white", color = "white")
+  ) +
+    geom_text(data = cluster_map |> filter(cluster != 999), aes(x = centroid_x, y = centroid_y, label = paste0(round(gop_pct,1), "%")), size = 4, fontface = "bold", color = "black")
+  
+  # Bottom bar
+majority_threshold <- floor(sum(cluster_map$electoral_votes) / 2) + 1
+
+vote_summary <- cluster_map %>%
+  select(electoral_votes, vote) |>
+  group_by(vote) %>%
+  summarize(total_votes = sum(electoral_votes)) %>%
+  ungroup() |>
+  mutate(vote = factor(vote, levels = c("Republican", "Democrat")))
+
+vote_breakdown_bar <- ggplot(vote_summary, aes(x = 1, y = total_votes, fill = vote)) +
+  geom_bar(stat = "identity", position = "stack", width = 0.5) +
+  geom_hline(yintercept = majority_threshold - 1,color = "black", linewidth = 1) +
+  annotate("text", x = 1.5, y = majority_threshold, 
+           label = paste0(" ", majority_threshold, " to win"), 
+           color = "black", fontface = "bold", size = 4, hjust = 0) +
+  scale_y_continuous(breaks = seq(0, sum(vote_summary$total_votes), by = 50)) +
+  coord_flip() +
+  scale_fill_manual(values = c("Democrat" = "blue", "Republican" = "red"), name = "Party") +
+  geom_text(data = vote_summary %>%
+              mutate(position = cumsum(total_votes) - total_votes / 2), 
+            aes(label = total_votes, y = position), 
+            size = 4, color = "white", fontface = "bold") +
+  labs(
+    x = NULL, y = "Total Electoral Votes",
+    fill = "Party"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank(),
+    legend.position = "none"
+  )
+
+final_plot <- wrap_elements(electoral_map) / wrap_elements(vote_breakdown_bar) + 
+  plot_layout(heights = c(2, 0.5))
+
+ggsave(filename = paste0(graphicspath_meta, "election_map.jpg"), plot = final_plot, dpi = 300, width = 10, height = 10)
+ggsave(filename = paste0(graphicspath_meta, "vote_map.jpg"), plot = vote_map, dpi = 300, width = 10, height = 10)
+```
