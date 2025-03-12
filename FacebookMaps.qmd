@@ -391,9 +391,8 @@ ggsave(filename = filepath_final, plot = plot, dpi = 200, width = 10, height = 1
 # }
 # images = c(images, filepath_final, filepath_final, filepath_final, filepath_final, filepath_final, filepath_final, filepath_final, filepath_final,  filepath_final, filepath_final) #most busted way to have the final frame stay for 10 seconds
 # 
-# # Generate the GIF with custom delays
 # gifski(images, gif_file = "clustering.gif", width = 2000, height = 2000, delay = 1)
-#gif doesn't seem to be stopping at the last image for ten seconds, maybe just use delay=1 and repeat the image 10 times
+#gif doesn't seem to be stopping at the last image for ten seconds like it should, maybe just use delay=1 and repeat the image 10 times
 ```
 
 ###2024 Presidential Election With New Boundaries
@@ -568,6 +567,7 @@ vote_breakdown_bar <- ggplot(vote_summary, aes(x = 1, y = total_votes, fill = vo
 final_plot <- wrap_elements(electoral_map) / wrap_elements(vote_breakdown_bar) + 
   plot_layout(heights = c(2, 0.5))
 
+# Save both versions
 ggsave(filename = paste0(graphicspath_meta, "election_map.jpg"), plot = final_plot, dpi = 300, width = 10, height = 10)
 ggsave(filename = paste0(graphicspath_meta, "vote_map.jpg"), plot = vote_map, dpi = 300, width = 10, height = 10)
 ```
