@@ -1,7 +1,7 @@
 ---
 title: "Map"
 format: html
-editor: visual
+editor: source
 ---
 ```{r}
 library(tidyverse)
@@ -17,6 +17,7 @@ library(colorspace)
 #map with per capita shading and bubbles for absolute count
 #aggregate county data by state and then use state map options
 ```
+
 #create_inset
 ```{r}
 create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels) {
@@ -101,6 +102,11 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
   
   title_height = 1.05 #we have more vertical space now
   
+  if(is.na(font_size)){
+    font_size = min(36*36/nchar(title), 36) #the plot is a bit more than 40 characters wide at font size 36, but at font size 36 I'd still want some breathing room so 36 characters is when I start reducing the font size (depends on the font you're using)
+    cat("Auto font size: ", font_size,"\n")
+  }
+  
   if(continental) {
     title_alignment = 0.5
     left_margin = 0.025
@@ -124,12 +130,12 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
     theme_minimal(base_family = font) +
     theme(
       legend.title = element_blank(),
-      legend.text = element_text(size = 12, color = palette$text_color ,face = "bold"),
+      legend.text = element_text(size = if_else(bubbles, 14, 12), color = palette$text_color ,face = "bold"),
       #legend.position = "bottom",
       legend.position = c(left_margin, -0.02),
       legend.justification = "left",
       legend.direction = "horizontal",
-      legend.key.width = unit(if_else(is.na(breaks[1]), 1.5, 0.5), "cm"),
+      legend.key.width = unit(if_else(bubbles, min(sqrt(max_bubble_size)/4, 0.75), 0.5), "cm"),
       legend.key.height = unit(0.5, "cm"),
       panel.grid = element_blank(),
       panel.background = element_rect(fill = palette$background_color, color = NA), # #f1e0cf
@@ -250,8 +256,8 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
     stop("Scale center not at 0 for bubbles makes no sense.")
   }
   
-  low_fill_color <- midpoint_rgb(palette$mid_color, palette$low_color, 0.7) #bias mix towards mid color
-  high_fill_color <- midpoint_rgb(palette$mid_color, palette$high_color, 0.7)
+  low_fill_color <- midpoint_rgb(palette$mid_color, palette$low_color, 0.8) #bias mix towards mid color
+  high_fill_color <- midpoint_rgb(palette$mid_color, palette$high_color, 0.8)
   
   map <- map |>
     mutate(Value = if_else(Value == 0 & is.na(scale_center), NA, Value),
@@ -288,12 +294,16 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
       )
   }
     
+    breaks = compute_bubble_breaks(map$abs_value)
+    break_labels = map_chr(breaks, ~shorten(.x))
+    break_labels = paste0(dollar, break_labels, unit)
+    
    plot <- plot +
     scale_size_continuous(
       range = c(min_bubble_size, max_bubble_size),
       name = "",
-      breaks = compute_bubble_breaks(map$abs_value),
-      labels = append_unit(dollar, unit)
+      breaks = breaks,
+      labels = break_labels
     ) + 
     geom_point(
       data = map |> filter(abs_value > 0),
@@ -434,14 +444,14 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
     label_to_color <- tibble::tibble(bin = formatted_labels, bin_color = bin_palette)
     
     map <- map %>%
-      left_join(label_to_color) %>%
+      left_join(label_to_color, by = "bin") %>%
       mutate(
         bin_color = replace_na(bin_color, palette$na_color),
-        brightness = map_chr(bin_color,  ~ calculate_brightness(.x)),
+        brightness = map_dbl(bin_color,  ~ calculate_brightness(.x)),
         text_color = if_else(brightness > 0.5, palette$text_color, "white")
       )
     
-  plot = add_state_labels(plot, map, palette) #dynamically set text color based on color of corresponding state (for states that don't have external label)
+  plot = add_state_labels(plot, map, palette, dollar, unit) #dynamically set text color based on color of corresponding state (for states that don't have external label)
   }
   
   if(!is.na(region)){
@@ -458,47 +468,55 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
 
 #add_state_labels
 ```{r}
-#need external label for MD
-add_state_labels <- function(plot, map, palette){
+#label for VT looks weird sometimes
+add_state_labels <- function(plot, map, palette, dollar, unit){
       #yes this is a mess but it works for now.
 
     adjustments <- tibble::tibble( #these adjustments are needed for labels but aren't good bubble locations
-  abbr = c("NH", "MA", "CT", "NJ","MD", "RI", "DE"),
-  x_adj = c(0, 50000, -35000, 0, -40000, 15000, 0),
-  y_adj = c(90000, 0, -30000,40000, 0, 10000, 0)
+  abbr = c("NH", "MA", "CT", "NJ","MD", "RI", "DE", "IN"), # Indiana adjustment is just so it doesn't overlap with Illinois for long labels
+  x_adj = c(0, 40000, -35000, 10000, 10000, 10000, 0, 0),
+  y_adj = c(90000, 20000, -20000, 20000, -30000, 10000, 0, 35000)
 )
 
+    unit = if(unit == "%") "%" else "" #any other unit would take up too much space
+    
 map <- map |>
   left_join(adjustments, by = "abbr") |>
   mutate(
     x = coalesce(x + x_adj, x),
     y = coalesce(y + y_adj, y)
   ) |>
-  select(-x_adj, -y_adj)
+  select(-x_adj, -y_adj) |>
+  mutate(label = sapply(Value, shorten),
+         label = if_else(Value < 0.01, "<0.01", label),
+         label = if_else(is.na(label), "", paste0(dollar, label, unit)))
 
-      plot <- plot + geom_text(data = map %>% filter(!(abbr %in% c( "DC","DE", "RI", "NJ", "HI", "VT", "CT", "MA", "NH"))), aes(x = x, y = y, label = lapply(Value, shorten), color = text_color), size = 4, fontface = "bold") +
+      plot <- plot + geom_text(data = map %>% filter(!(abbr %in% c( "DC","DE", "RI", "NJ", "HI", "VT", "CT", "MA", "NH", "MD"))), aes(x = x, y = y, label = label, color = text_color), size = 4, fontface = "bold") +
         scale_color_identity() +
   geom_text_repel(data = map %>% filter(abbr %in% c("DE", "HI")),
-                           aes(x = x, y = y, label = lapply(Value, shorten)),
+                           aes(x = x, y = y, label = label),
                            box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100) +
         geom_text_repel(data = map %>% filter(abbr == "RI"),
-                           aes(x = x, y = y, label = lapply(Value, shorten)),
-                           box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -50) +
+                           aes(x = x, y = y, label = label),
+                           box.padding = 0.75, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -50) +
         geom_text_repel(data = map %>% filter(abbr == "VT"),
-                           aes(x = x, y = y, label = lapply(Value, shorten)),
+                           aes(x = x, y = y, label = label),
                            box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = -100, nudge_y = 100) +
     geom_text_repel(data = map %>% filter(abbr == "NJ"),
-                           aes(x = x, y = y, label = lapply(Value, shorten)),
+                           aes(x = x, y = y, label = label),
                            box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100) +
         geom_text_repel(data = map %>% filter(abbr == "CT"),
-                           aes(x = x, y = y, label = lapply(Value, shorten)),
+                           aes(x = x, y = y, label = label),
                            box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 0, nudge_y = -50) +
         geom_text_repel(data = map %>% filter(abbr == "NH"),
-                           aes(x = x, y = y, label = lapply(Value, shorten)),
+                           aes(x = x, y = y, label = label),
                            box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = -100, nudge_y = 100) +
         geom_text_repel(data = map %>% filter(abbr == "MA"),
-                           aes(x = x, y = y, label = lapply(Value, shorten)),
-                           box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = 100)
+                           aes(x = x, y = y, label = label),
+                           box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = 100) +
+        geom_text_repel(data = map %>% filter(abbr == "MD"),
+                           aes(x = x, y = y, label = label),
+                           box.padding = 2, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100)
       return(plot)
 }
 ```
@@ -533,11 +551,6 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
   if(logratio){ #log ratio: use with migration type = "net", supply breaks as log of the positive ratios you want as breaks ex. c(log(1.1), log(1.3), log(1.5))
     per = "" #anything else would be silly
     unit = ":1"
-  }
-    
-  if(is.na(font_size)){
-    font_size = min(36*38/nchar(title), 36) #the plot is a bit more than 40 characters wide at font size 36, but at font size 36 I'd still want some breathing room so 38 characters is when I start reducing the font size
-    cat("Auto font size: ", font_size,"\n")
   }
     
   #highlight region can be specified with region_fips or cbsa code
@@ -681,8 +694,8 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
     inset_text <- create_inset(map, level, inset_style, 10, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels)
   } else if (inset_style == "split") {
     top <- create_inset(map, level, "top", 5, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels)
-    bottom <- create_inset(map, level, "bottom", 5, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, inset_labels)
-    inset_text = paste0(top, bottom, hide_values)
+    bottom <- create_inset(map, level, "bottom", 5, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels)
+    inset_text = paste0(top, bottom)
   }
   
     if (continental) { #filter out AK and HI after inset
@@ -721,7 +734,7 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
       theme(legend.key = element_rect(fill = NA, color = "black", size = 0.5))
   }
   
-  filepath = paste0(graphicspath, str_remove_all(title, " "), source, ".jpg")
+  filepath = paste0(graphicspath, str_remove_all(title, " "), source, "_", level, ".jpg")
   ggsave(filename = filepath, plot = plot, dpi = dpi, width = 10, height = 10) #set dpi to 100 for a cool retro look
   
   system2("open", filepath)
