@@ -1,0 +1,72 @@
+---
+title: "MigrationMappingFunction"
+format: html
+editor: source
+---
+
+```{r}
+migration_map <- function(data, region_fips = NA, migration_type, logratio = F,...) {
+  if(migration_type == "net"){
+      plusminus_labels = list("pos" = "Net In-Migration", "neg" = "Net Out-Migration")
+      inset_labels = list("top" = "/n/ Highest Net In-Migration", "bottom" = "/n/ Highest Net Out-Migration")
+      scale_center = 0
+    }
+    data = get_migration_data(data, region_fips, migration_type, logratio)
+  map(data = data, scale_center = scale_center, plusminus_labels = plusminus_labels, inset_labels = inset_labels, ...)
+}
+```
+
+#get_migration_data
+```{r}
+get_migration_data <- function(data, region_fips, migration_type, logratio){
+  #move migration-specific stuff outside this file
+  #add option for gross migration
+  
+  #user supplies region_fips to specify a region, or none for total
+    if(migration_type == "in"){
+        if(!is.na(region_fips)[1]){
+          data <- data |>
+            filter(receiver_FIPS %in% region_fips, !sender_FIPS %in% region_fips)
+        }
+          data <- data |>
+        group_by(sender_FIPS) |>
+        summarize(Value = sum(flow, na.rm = T)) |>
+        filter(!is.na(Value)) |>
+        rename(fips = sender_FIPS)
+    } else if(migration_type == "out"){
+      if(!is.na(region_fips)[1]){
+        data <- data |>
+        filter(sender_FIPS %in% region_fips, !receiver_FIPS %in% region_fips)
+      }
+      data <- data |>
+        group_by(receiver_FIPS) |>
+        summarize(Value = sum(flow, na.rm = T))|>
+        filter(!is.na(Value)) |>
+        rename(fips = receiver_FIPS)
+    } else if(migration_type == "net"){
+      if(!is.na(region_fips)[1]){
+      data <- data |>
+          filter(sender_FIPS %in% region_fips, !receiver_FIPS %in% region_fips)
+      } #I rewrote this without testing so it might be wrong
+        data <- data |>
+        group_by(receiver_FIPS) |>
+        summarize(flow = sum(flow, na.rm = T),
+                  counterflow = sum(counterflow, na.rm = T)) |>
+        mutate(net = flow - counterflow,
+               ratio = flow/counterflow,
+               logratio = log(ratio)) |>
+        rename(fips = receiver_FIPS)
+      
+      if(logratio){
+        data <- data |>
+          rename(Value = logratio)
+      } else{
+        data <- data |>
+          rename(Value = net)
+      }
+    } else {
+      stop("Migration type not recognized. Choose 'in', 'out', or 'net'")
+    }
+  return(data)
+}
+```
