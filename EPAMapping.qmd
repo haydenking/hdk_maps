@@ -1,0 +1,1228 @@
+---
+title: "EPAMapping"
+format: pdf
+editor: source
+---
+
+Aquatic resource surveys
+https://www.epa.gov/national-aquatic-resource-surveys/what-waters-are-included-national-aquatic-resource-surveys#nrsa
+
+#NLA
+https://www.epa.gov/national-aquatic-resource-surveys/reports-and-data-national-lakes-assessment-2022
+
+#NRSA
+https://www.epa.gov/national-aquatic-resource-surveys/reports-and-data-national-rivers-and-streams-assessment-2018-19
+
+#NWCA
+https://www.epa.gov/national-aquatic-resource-surveys/reports-and-data-national-wetland-condition-assessment-2021
+
+#NCCA (can't find 2020 data as a zip, had to download individually)
+
+
+condition estimates and data for population estimates files have all indicators of interest:
+https://www.epa.gov/national-aquatic-resource-surveys/data-national-aquatic-resource-surveys
+
+```{r}
+library(sf)
+library(tidyverse)
+library(tools)
+library(ggfx)
+library(usmap)
+library(scales)
+
+wd = "/Users/Hayden/Maps/"
+datapath_epa = paste0(wd, "Data/EPA/")
+graphicspath_epa = paste0(wd, "Maps/EPA/")
+
+convert_to_sf <- function(data){ #requires county_map loaded in to use its CRS (lazy but could be fixed later easily)
+  data <- data |>
+  rename(y = LAT_DD83,
+         x = LON_DD83)
+data$geometry <- st_sfc(mapply(function(x, y) st_point(c(x, y)), data$x, data$y, SIMPLIFY = FALSE))
+data <- st_sf(data, crs = 4326)
+data <- st_transform(data, crs = usmap_crs())
+  return(data)
+}
+```
+
+#NLA
+```{r}
+lakes = st_read(paste0(datapath_epa, "NLA2022_lakes/NLA2022_lakes.shp")) |>
+  mutate(GNIS_NAME = if_else(is.na(GNIS_NAME) | GNIS_NAME == "None", NA, GNIS_NAME),
+         GNIS_NAME = case_when(!is.na(GNIS_NAME) ~ GNIS_NAME,
+                               AreaSqKm > 0.08 ~ "Unnamed Lake", 
+                               T ~ "Unnamed Pond")) |>
+  st_drop_geometry()
+# lakes$geometry = st_centroid(lakes$geometry) 
+# lakes <- lakes |>
+#   st_transform(usmap_crs())
+```
+
+```{r}
+# data <- read_csv(paste0(datapath_epa,"NLA2007-2022_Data_forPopEstimates_IndexVisits_ProbSites.csv")) |>
+#   filter(DSGN_CYCLE == 2022) |>
+#   select(-PSTL_CODE) |>
+#   left_join(lakes, by = "SITE_ID") |>
+#   rename(abbr = PSTL_CODE) |>
+#   mutate(name = paste0(GNIS_NAME, ", ", abbr)) |>
+#   st_as_sf() |>
+#   mutate(acres = 247*AreaSqKm)
+
+lakes_data <- read_csv(paste0(datapath_epa,"NLA2007-2022_Data_forPopEstimates_IndexVisits_ProbSites.csv")) |>
+  filter(DSGN_CYCLE == 2022) |>
+  convert_to_sf() |>
+  left_join(lakes |> select(SITE_ID, AreaSqKm, GNIS_NAME), by = "SITE_ID") |>
+  rename(abbr = PSTL_CODE) |>
+  mutate(name = paste0(GNIS_NAME, ", ", abbr),
+         acres = 247*AreaSqKm)
+```
+
+```{r}
+map(data = lakes_data |> rename(Value = ENTEROCOCCI_RESULT),
+    map = state_map,
+    title = "Enterococci Concentration in Lakes",
+    subtitle = "Canadian standard: 10 CCE/mL for recreation",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2022 EPA National Lakes Assessment",
+    bubbles = F,
+    cutoff_column = "acres",
+    inset_cutoff = 200,
+    unit = "CCE/mL",
+    breaks = c(10, 100),
+    na_to_0 = T,
+    obs_units = "Lakes",
+    palette = list(high_color = "darkgreen"))
+```
+
+```{r}
+map(data = lakes_data |> rename(Value = MICX_RESULT),
+    map = state_map,
+    subtitle = "EPA standard: 1.6 µg/L for drinking (0.3 for young children); 8 µg/L for recreation",
+    title = "Microcystin Concentration in Lakes",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2022 EPA National Lakes Assessment",
+    bubbles = F,
+    cutoff_column = "acres",
+    inset_cutoff = 200,
+    unit = "µg/L",
+    breaks = c(0.3,1.6,8),
+    na_to_0 = T,
+    obs_units = "Lakes",
+    palette = list(high_color = "darkgreen"))
+```
+
+```{r}
+map(data = lakes_data |> rename(Value = CYLSPER_RESULT),
+    map = state_map,
+    subtitle = "EPA standard: 3 µg/L for drinking (0.7 for young children)",
+    title = "Cylindrospermopsin Concentration in Lakes",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2022 EPA National Lakes Assessment",
+    bubbles = F,
+    cutoff_column = "acres",
+    inset_cutoff = 200,
+    unit = "µg/L",
+    breaks = c(0.7,3),
+    na_to_0 = T,
+    obs_units = "Lakes",
+    palette = list(high_color = "darkgreen"))
+```
+
+```{r}
+map(data = lakes_data |> rename(Value = ATRAZINE_RESULT),
+    map = state_map,
+    subtitle = "EPA standard for drinking: 3 ppb; CA standard: 1 ppb",
+    title = "Atrazine Concentration in Lakes",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2022 EPA National Lakes Assessment",
+    bubbles = F,
+    cutoff_column = "acres",
+    inset_cutoff = 200,
+    unit = "ppb",
+    breaks = c(1,3),
+    na_to_0 = T,
+    obs_units = "Lakes",
+    palette = list(high_color = "darkgreen"))
+```
+
+```{r}
+map(data = lakes_data |> rename(Value = CHLA_RESULT),
+    map = state_map,
+    subtitle = "Values over 10 µg/L may indicate algae blooms",
+    title = "Chlorophyll-a Concentration in Lakes",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2022 EPA National Lakes Assessment",
+    bubbles = F,
+    cutoff_column = "acres",
+    inset_cutoff = 200,
+    unit = "µg/L",
+    breaks = c(5,10),
+    na_to_0 = T,
+    tag = F,
+    obs_units = "Lakes",
+    palette = list(high_color = "darkgreen"))
+```
+
+#NRSA
+```{r}
+rivers = read_csv(paste0(datapath_epa, "NRSA_1819_landscape.csv")) |>
+  mutate(GNIS_NAME = if_else(is.na(GNIS_NAME), "Unnamed Creek", GNIS_NAME))
+```
+
+```{r}
+#write functions to clean up code in this section
+
+river_data = read_csv(paste0(datapath_epa, "NRSA1819_Data_for_PopulationEstimates.csv")) |>
+  filter(DSGN_CYCLE == "2018-19") |>
+  convert_to_sf() |>
+  left_join(rivers |> select(SITE_ID, GNIS_NAME), by = "SITE_ID") |>
+  rename(abbr = PSTL_CODE) |>
+  mutate(name = paste0(GNIS_NAME, ", ", abbr))
+```
+
+```{r}
+mercury = read_csv(paste0(datapath_epa,"nrsa_1819_mercury_in_fish_tissue_plugs_-_data.csv")) |> 
+  select(SITE_ID, RESULT) |>
+  mutate(RESULT = replace_na(RESULT, 0)) |>
+  group_by(SITE_ID) |>
+  summarise(RESULT = mean(RESULT))
+
+map(data = river_data |> left_join(mercury, by = "SITE_ID") |> rename(Value = RESULT) |> filter(!is.na(Value)) |> mutate(Value = if_else(Value == 0, NA, Value)),
+    map = state_map,
+    subtitle = "EPA standards: <0.15 µg/g: 3 servings/week; <0.23 µg/g: 2; <0.46 µg/g: 1",
+    title = "Mercury Concentration in Fish",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+    bubbles = F,
+    unit = "µg/g",
+    breaks = c(0.15, 0.23, 0.46),
+    obs_units = "Sites",
+    na_label = "Undetected")
+```
+
+```{r}
+# https://www.epa.gov/sdwa/drinking-water-regulations-and-contaminants
+
+chem <- read_csv(paste0(datapath_epa, "nrsa_1819_water_chemistry_chla_-_data.csv")) |>
+  mutate(across(c(CHLA_RESULT, SULFATE_RESULT, NITRATE_N_RESULT, CHLORIDE_RESULT, NITRATE_N_RESULT, AMMONIA_N_RESULT, CALCIUM_RESULT, DOC_RESULT, MAGNESIUM_RESULT, NTL_DISS_RESULT, NTL_RESULT, POTASSIUM_RESULT, PTL_RESULT, SILICA_RESULT, SODIUM_RESULT, TSS_RESULT, TURB_RESULT),
+                ~ replace_na(as.numeric(.x), 0))) |>
+  group_by(SITE_ID) |>
+  summarize(across(c(CHLA_RESULT, SULFATE_RESULT, NITRATE_N_RESULT, CHLORIDE_RESULT, NITRATE_N_RESULT, AMMONIA_N_RESULT, CALCIUM_RESULT, DOC_RESULT, MAGNESIUM_RESULT, NTL_DISS_RESULT, NTL_RESULT, POTASSIUM_RESULT, PTL_RESULT, SILICA_RESULT, SODIUM_RESULT, TSS_RESULT, TURB_RESULT),
+                   mean, .names = "{.col}"), .groups = "drop") |>
+  ungroup()
+
+
+#0 to NA with undetected label doesn't seem good for this one because all the undetected are in OK and WI suggesting differences in lab procedure may be responsible for difference
+map(data = river_data |> left_join(chem, by = "SITE_ID") |> rename(Value = CHLA_RESULT) |> filter(!is.na(Value)),
+    map = state_map,
+    subtitle = "Values over 10 µg/L may indicate algae blooms",
+    title = "Chlorophyll-a Concentration in Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+    bubbles = F,
+    unit = "µg/L",
+    breaks = c(5,10,20),
+    obs_units = "Sites",
+    palette = list(high_color = "darkgreen"))
+
+map(data = river_data |> left_join(chem, by = "SITE_ID") |> rename(Value = SULFATE_RESULT) |> filter(!is.na(Value)) |>
+      mutate(Value = if_else(Value == 0, NA, Value)),
+    map = state_map,
+    subtitle = "EPA standard for drinking water: 250 mg/L for taste and odor; 500 mg/L for health",
+    title = "Sulfate Concentration in Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+    bubbles = F,
+    unit = "mg/L",
+    breaks = c(250, 500),
+    obs_units = "Sites",
+    na_label = "Undetected",
+    palette = list(high_color = "#fc7703"))
+
+map(data = river_data |> left_join(chem, by = "SITE_ID") |> rename(Value = NITRATE_N_RESULT) |> filter(!is.na(Value)) |>
+      mutate(Value = if_else(Value == 0, NA, Value)),
+    map = state_map,
+    subtitle = "EPA standard for drinking water: 10 mg N/L",
+    title = "Nitrate Concentration in Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+    bubbles = F,
+    unit = "mg N/L",
+    breaks = c(5,10),
+    obs_units = "Sites",
+    na_label = "Undetected",
+    palette = list(na_color = "lightblue",
+                   high_color = "darkgreen"))
+
+map(data = river_data |> left_join(chem, by = "SITE_ID") |> rename(Value = CHLORIDE_RESULT) |> filter(!is.na(Value)) |>
+      mutate(Value = if_else(Value == 0, NA, Value)),
+    map = state_map,
+    subtitle = "EPA standard for drinking water: 250 mg N/L",
+    title = "Chloride Concentration in Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+    bubbles = F,
+    unit = "mg/L",
+    breaks = c(125,250),
+    obs_units = "Sites",
+    na_label = "Undetected",
+    palette = list(na_color = "lightblue",
+                   high_color = "purple"))
+
+#nothing above EPA standard
+# 
+# map(data = river_data |> left_join(chem, by = "SITE_ID") |> rename(Value = NITRITE_N_RESULT) |> filter(!is.na(Value)) |>
+#       mutate(Value = if_else(Value == 0, NA, Value)),
+#     map = state_map,
+#     subtitle = "EPA Standard: 1 mg N/L",
+#     title = "Nitrite Concentration in Rivers",
+#     state_map = state_map,
+#     graphicspath = graphicspath_epa,
+#     source = "EPA",
+#     caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+#     bubbles = F,
+#     unit = "mg N/L",
+#     breaks = c(0.5),
+#     obs_units = "Sites",
+#     na_label = "Undetected",
+#     palette = list(na_color = "lightblue",
+#                    mid_color = "#ECE4D5",
+#                    high_color = "darkgreen"))
+
+#even using the chronic standard there may be only a few violations
+# map(data = river_data |> left_join(chem, by = "SITE_ID") |> rename(Value = AMMONIA_N_RESULT) |> filter(!is.na(Value)) |>
+#       mutate(Value = if_else(Value == 0, NA, Value)),
+#     map = state_map,
+#     subtitle = "",
+#     title = "Ammonia Concentration in Rivers",
+#     state_map = state_map,
+#     graphicspath = graphicspath_epa,
+#     source = "EPA",
+#     caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+#     bubbles = F,
+#     unit = "mg/L",
+#     breaks = c(125,250),
+#     obs_units = "Sites",
+#     na_label = "Undetected",
+#     palette = list(na_color = "lightblue",
+#                    mid_color = "#ECE4D5",
+#                    high_color = "purple"))
+
+
+map(data = river_data |> left_join(chem, by = "SITE_ID") |> mutate(Value = 2.5*CALCIUM_RESULT + 4.1*MAGNESIUM_RESULT) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Water Hardness of Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment\nRiver water hardness may differ from municipal tap water due to treatment and source differences",
+    bubbles = F,
+    inset_style = "hidden",
+    continental = T,
+    unit = "mg/L",
+    breaks = c(60,120,180),
+    labels_manual = c("Soft", "Moderately Hard", "Hard", "Very Hard"),
+    obs_units = "Sites",
+    palette = list(high_color = "#fc5a03"))
+
+hardness = read_csv(paste0(datapath_epa, "nrsa_1819_water_chemistry_chla_-_data.csv")) |>
+  select(STATE, MAGNESIUM_RESULT, CALCIUM_RESULT) |>
+  mutate(Value = 2.5*CALCIUM_RESULT + 4.1*MAGNESIUM_RESULT) |>
+  group_by(STATE) |>
+  summarise(Value = mean(Value, na.rm = T)) |>
+  ungroup() |>
+  rename(abbr = STATE) |>
+  left_join(state_map |> st_drop_geometry() |> select(abbr, fips)) |> select(-abbr)
+
+map(data = hardness,
+    map = state_map,
+    subtitle = "Calcium Carbonate Equivalent mg/L",
+    title = "Water Hardness of Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment\nUSGS definitions: soft <60; moderately hard <120; hard <180; very hard >180\nRiver hardness may differ from tap water due to treatment and source differences",
+    bubbles = F,
+    continental = F,
+    inset_style = "split",
+    inset_labels = list(top = "Top /n/ Hardest", bottom = "Top /n/ Softest"),
+    unit = "mg/L",
+    breaks = c(60,120,180),
+    labels_manual = c("Soft", "Moderately Hard", "Hard", "Very Hard"),
+    palette = list(mid_color = "#ECE4D5",
+                   high_color = "#fc5a03"))
+
+map(data = river_data |> left_join(chem, by = "SITE_ID") |> rename(Value = DOC_RESULT) |> filter(!is.na(Value)) |>
+      mutate(Value = if_else(Value == 0, NA, Value)),
+    map = state_map,
+    title = "Dissolved Organic Carbon in Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+    bubbles = F,
+    unit = "mg/L",
+    breaks = c(1,2,5,10),
+    obs_units = "Sites",
+    na_label = "Undetected",
+    palette = list(na_color = "lightblue",
+                   high_color = "darkgreen"))
+
+map(data = river_data |> left_join(chem, by = "SITE_ID") |> rename(Value = POTASSIUM_RESULT) |> filter(!is.na(Value)) |>
+      mutate(Value = if_else(Value == 0, NA, Value)),
+    map = state_map,
+    title = "Potassium Concentration in Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+    bubbles = F,
+    unit = "mg/L",
+    breaks = c(5,10,20),
+    obs_units = "Sites",
+    na_label = "Undetected",
+    palette = list(high_color = "darkblue"))
+
+map(data = river_data |> left_join(chem, by = "SITE_ID") |> rename(Value = SODIUM_RESULT) |> filter(!is.na(Value)) |>
+      mutate(Value = if_else(Value == 0, NA, Value)),
+    map = state_map,
+    title = "Sodium Concentration in Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+    bubbles = F,
+    unit = "mg/L",
+    breaks = c(10,100,1000),
+    obs_units = "Sites",
+    na_label = "Undetected",
+    palette = list(high_color = "darkblue"))
+
+map(data = river_data |> left_join(chem, by = "SITE_ID") |> rename(Value = TSS_RESULT) |> filter(!is.na(Value)) |>
+      mutate(Value = if_else(Value == 0, NA, Value)),
+    map = state_map,
+    title = "Total Suspended Solids in Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+    bubbles = F,
+    unit = "mg/L",
+    breaks = c(10,100),
+    obs_units = "Sites",
+    na_label = "Undetected",
+    palette = list(na_color = "lightblue",
+                   high_color = "darkgreen"))
+
+map(data = river_data |> left_join(chem, by = "SITE_ID") |> rename(Value = TURB_RESULT) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Turbidity in Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+    bubbles = F,
+    unit = "NTU",
+    breaks = c(5,10,20,50,100),
+    obs_units = "Sites",
+    palette = list(high_color = "brown"))
+
+#these all seem boring idk if I'll bother making them. A lot of these aren't really postable
+#not made yet:
+#dissolved nitrogen mg N/L
+#NTL total nitrogen mg N/L
+#PTL total phosphorus µg/L
+#Silica mg/L
+
+ph = read_csv(paste0(datapath_epa, "nrsa_1819_water_chemistry_chla_-_data.csv")) |>
+  rename(RESULT = PH_RESULT) |>
+    filter(!is.na(RESULT)) |>
+  mutate(RESULT = 10^RESULT) |>
+  group_by(SITE_ID) |>
+  summarize(RESULT = mean(RESULT)) |>
+    ungroup() |>
+    mutate(RESULT = log10(RESULT))
+
+map(data = river_data |> left_join(ph, by = "SITE_ID") |> rename(Value = RESULT) |> filter(!is.na(Value)),
+    map = state_map,
+    subtitle = "EPA acceptable range for drinking water: 6.5-8.5",
+    title = "pH of Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment\nRiver pH may differ from tap water due to treatment and source differences",
+    bubbles = F,
+    inset_style = "split",
+    breaks = c(0.75,1),
+    scale_center = 7.5,
+    obs_units = "Sites",
+    inset_labels = list(top = "/n/ Most Alkaline", bottom = "/n/ Most Acidic"),
+    palette = list(low_color = "red",
+      mid_color = "lightgreen",
+                   high_color = "blue"))
+
+```
+
+```{r}
+#fish metrics (percent carnivore, percent alien etc)
+
+fish_metrics = read_csv(paste0(datapath_epa,"nrsa-1819-fish-metrics-data.csv"))
+
+# map(data = data |> left_join(fish_metrics, by = "SITE_ID") |> mutate(Value = ALIENPIND/100) |> filter(!is.na(Value)),
+#     map = state_map,
+#     title = "Percent Non-Native Fish in Rivers",
+#     state_map = state_map,
+#     graphicspath = graphicspath_epa,
+#     source = "EPA",
+#     inset_style = "hidden",
+#     caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+#     bubbles = F,
+#     unit = "%",
+#     breaks = c(20,45),
+#     scale_center = 50,
+#     palette = list(low_color = "darkgreen",
+#                    high_color = "#fc5a03"))
+#species is better because we don't want r-k selection to skew results
+
+map(data = river_data |> left_join(fish_metrics, by = "SITE_ID") |> mutate(Value = ALIENPTAX/100) |> filter(TOTLNIND > 9) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Percent Non-Native Fish Species in Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    inset_style = "hidden",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment\nOnly sites with 10 or more fish samples shown",
+    bubbles = F,
+    unit = "%",
+    breaks = c(20,45),
+    scale_center = 50,
+    palette = list(low_color = "darkgreen",
+                   high_color = "#fc5a03"))
+
+map(data = river_data |> left_join(fish_metrics, by = "SITE_ID") |> mutate(Value = CARNPTAX/100) |> filter(TOTLNIND > 9) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Percent Carnivorous Fish Species in Rivers",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    inset_style = "hidden",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment\nOnly sites with 10 or more fish samples shown",
+    bubbles = F,
+    unit = "%",
+    breaks = c(20,45),
+    scale_center = 50,
+    palette = list(low_color = "darkgreen",
+                   high_color = "#fc5a03"))
+
+
+
+map(data = river_data |> left_join(fish_metrics, by = "SITE_ID") |> mutate(Value = WTD_TV) |> filter(TOTLNIND > 9) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Hilsenhoff Biotic Index of River Fish",
+    subtitle = "Higher values indicate fish more tolerant of organic pollution",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    inset_style = "split",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment\nOnly sites with 10 or more fish samples shown",
+    bubbles = F,
+    obs_units = "Sites",
+    breaks = c(0.5,1.5,2.5),
+    scale_center = 6,
+    palette = list(low_color = "darkgreen",
+                   high_color = "#fc5a03"))
+```
+
+```{r}
+#BERW vs BETB sample
+benthic_macroinvertibrates = read_csv(paste0(datapath_epa,"nrsa_1819_benthic_macroinvertebrate_metrics_-_data.csv")) |>
+  select(SITE_ID, SAMPLE_TYPE, HPRIME, WTD_TV, TOTLNIND) |>
+  group_by(SITE_ID) |>
+  mutate(n = sum(TOTLNIND),
+         TOTLNIND = TOTLNIND/n) |>
+  summarize(HPRIME = sum(HPRIME*TOTLNIND),
+            WTD_TV = sum(WTD_TV*TOTLNIND))
+
+#title too small
+map(data = river_data |> left_join(benthic_macroinvertibrates, by = "SITE_ID") |> mutate(Value = WTD_TV) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Hilsenhoff Biotic Index of Benthic Macroinvertibrates",
+    subtitle = "Higher values indicate organisms more tolerant of organic pollution",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    inset_style = "split",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment\nOnly sites with 10 or more fish samples shown",
+    bubbles = F,
+    obs_units = "Sites",
+    breaks = c(0.5,1.5,2.5),
+    scale_center = 6,
+    palette = list(low_color = "darkgreen",
+                   high_color = "#fc5a03"))
+
+map(data = river_data |> left_join(benthic_macroinvertibrates, by = "SITE_ID") |> mutate(Value = HPRIME) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Shannon Diversity of Benthic Macroinvertibrates",
+    subtitle = "Higher values indicate more biodiversity",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    inset_style = "split",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment\nOnly sites with 10 or more fish samples shown",
+    bubbles = F,
+    obs_units = "Sites",
+    breaks = c(0.25,0.75),
+    scale_center = 2.5,
+    palette = list(low_color = "#fc5a03",
+                   high_color = "darkgreen"))
+
+
+```
+
+```{r}
+enterococci = read_csv(paste0(datapath_epa, "NRSA_1819_enterococci.csv"))
+
+map(data = river_data |> left_join(enterococci, by = "SITE_ID") |> mutate(Value = ENT_1X_CCE_100ML/100) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Enterococci Concentration in Rivers",
+    subtitle = "Canadian standard: 10 CCE/mL for recreation",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+    bubbles = F,
+    # inset_style = "hidden",
+    unit = "CCE/mL",
+    breaks = c(5, 10),
+    obs_units = "Sites",
+    palette = list(high_color = "darkgreen"))
+```
+
+
+#NWCA
+```{r}
+wetlands = read_csv(paste0(datapath_epa,"nwca_2021_2011_data_for_population_estimates.csv")) |>
+  convert_to_sf() |>
+  mutate(abbr = str_sub(UNIQUE_ID, 5, 6))
+
+wetlands_siteinfo21 = read_csv(paste0(datapath_epa,"nwca21_siteinfo-data.csv")) |>
+  select(SITE_ID, HUC10_NM) |>
+  unique()
+
+wetlands_siteinfo16 = read_csv(paste0(datapath_epa,"nwca-2016-site-information-data_0.csv")) |>
+  select(SITE_ID, HUC10_NM) |>
+  unique()
+
+wetlands_siteinfo = rbind(wetlands_siteinfo21, wetlands_siteinfo16)
+
+wetlands = wetlands |>
+  left_join(wetlands_siteinfo) |>
+  mutate(name = paste0(HUC10_NM, ", ", abbr))
+#no heavy metals data for 2021
+
+wetlands16 = wetlands |> filter(DSGN_CYCLE == 2016)
+
+map(data = wetlands16 |> mutate(Value = HMI) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Heavy Metal Index in Wetlands",
+    subtitle = "Higher values indicate more contamination",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2016 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    obs_units = "Sites",
+    breaks = c(0.5,1.5),
+    scale_center = 2,
+    labels_manual = c("0","1","2","3","4+"))
+
+map(data = wetlands16 |> mutate(Value = PB_EF) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Enrichment Factor of Lead in Wetlands",
+    subtitle = "Concentration relative to reference",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2016 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    breaks = c(2,5,10),
+    obs_units = "Sites")
+
+map(data = wetlands16 |> mutate(Value = CD_EF) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Enrichment Factor of Cadmium in Wetlands",
+    subtitle = "Concentration relative to reference",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2016 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    breaks = c(2,5,10),
+    obs_units = "Sites")
+
+map(data = wetlands16 |> mutate(Value = CO_EF) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Enrichment Factor of Cobalt in Wetlands",
+    subtitle = "Concentration relative to reference",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2016 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    breaks = c(2,5,10),
+    obs_units = "Sites")
+
+map(data = wetlands16 |> mutate(Value = CR_EF) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Enrichment Factor of Chromium in Wetlands",
+    subtitle = "Concentration relative to reference",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2016 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    breaks = c(2,5,10),
+    obs_units = "Sites")
+
+map(data = wetlands16 |> mutate(Value = NI_EF) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Enrichment Factor of Nickel in Wetlands",
+    subtitle = "Concentration relative to reference",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2016 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    breaks = c(2,5,10),
+    obs_units = "Sites")
+
+heavymetals = wetlands16 |>
+  st_drop_geometry() |>
+  select(contains("EF"), abbr) |>
+  drop_na() |>
+  group_by(abbr) |>
+  summarise(across(contains("EF"), mean, .names = "{.col}")) |>
+  left_join(state_map |> st_drop_geometry() |> select(abbr, fips))
+
+map(data = heavymetals |>
+    rename(Value = CO_EF),
+    map = state_map,
+    title = "Average Enrichment Factor for Cobalt in Wetlands",
+    subtitle = "Concentration relative to reference",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2016 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    continental = T,
+    breaks = c(1,1.2,1.5))
+
+map(data = heavymetals |>
+    rename(Value = PB_EF),
+    map = state_map,
+    title = "Average Enrichment Factor for Lead in Wetlands",
+    subtitle = "Concentration relative to reference",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2016 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    continental = T,
+    breaks = c(1,1.2,1.5,2))
+
+map(data = heavymetals |>
+    rename(Value = CR_EF),
+    map = state_map,
+    title = "Average Enrichment Factor for Chromium in Wetlands",
+    subtitle = "Concentration relative to reference",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2016 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    continental = T,
+    breaks = c(1,1.2,1.5))
+
+map(data = heavymetals |>
+    rename(Value = CD_EF),
+    map = state_map,
+    title = "Average Enrichment Factor for Cadmium in Wetlands",
+    subtitle = "Concentration relative to reference",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2016 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    continental = T,
+    breaks = c(1,1.2,1.5))
+
+map(data = heavymetals |>
+    rename(Value = SB_EF),
+    map = state_map,
+    title = "Average Enrichment Factor for Antimony in Wetlands",
+    subtitle = "Concentration relative to reference",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2016 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    continental = T,
+    breaks = c(1,1.2,1.5))
+
+map(data = heavymetals |>
+    rename(Value = NI_EF),
+    map = state_map,
+    title = "Average Enrichment Factor for Nickel in Wetlands",
+    subtitle = "Concentration relative to reference",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2016 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    continental = T,
+    breaks = c(1,1.2,1.5))
+```
+
+```{r}
+vegmetrics = read_csv(paste0(datapath_epa,"nwca21_VegMetrics-data.csv")) |>
+  select(SITE_ID, where(is.numeric)) |>
+  group_by(SITE_ID) |>
+  summarize(across(where(is.numeric), ~ mean(.x, na.rm = TRUE))) |> #not sure that diversity indices can really be averaged together but it shouldn't make much of a difference so long as these measures are relatively close between visits
+  ungroup()
+
+map(data = wetlands |> left_join(vegmetrics, by = "SITE_ID") |> mutate(Value = H_ALL) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Shannon Diversity of Plants in Wetlands",
+    subtitle = "Higher values indicate more biodiversity",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    inset_style = "hidden",
+    caption_manual = "Source: 2021 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    continental = T,
+    obs_units = "Sites",
+    breaks = c(0.25,0.75),
+    scale_center = 2,
+    palette = list(low_color = "#fc5a03",
+                   mid_color = "green",
+                   high_color = "darkgreen"))
+
+map(data = wetlands |> left_join(vegmetrics, by = "SITE_ID") |> mutate(Value = D_ALL) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Simpson Diversity of Plants in Wetlands",
+    subtitle = "Higher values indicate more biodiversity",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    inset_style = "hidden",
+    caption_manual = "Source: 2021 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    continental = T,
+    obs_units = "Sites",
+    breaks = c(0.1,0.25),
+    scale_center = 0.5,
+    palette = list(low_color = "#fc5a03",
+                   mid_color = "green",
+                   high_color = "darkgreen"))
+
+map(data = wetlands |> left_join(vegmetrics, by = "SITE_ID") |> mutate(Value = H_NAT) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Shannon Diversity of Native Plants in Wetlands",
+    subtitle = "Higher values indicate more biodiversity",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    inset_style = "hidden",
+    caption_manual = "Source: 2021 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    continental = T,
+    obs_units = "Sites",
+    breaks = c(0.25,0.75),
+    scale_center = 2,
+    palette = list(low_color = "#fc5a03",
+                   mid_color = "green",
+                   high_color = "darkgreen"))
+
+map(data = wetlands |> left_join(vegmetrics, by = "SITE_ID") |> mutate(Value = D_NAT) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Simpson Diversity of Native Plants in Wetlands",
+    subtitle = "Higher values indicate more biodiversity",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    inset_style = "hidden",
+    caption_manual = "Source: 2021 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    continental = T,
+    obs_units = "Sites",
+    breaks = c(0.1,0.25),
+    scale_center = 0.5,
+    palette = list(low_color = "#fc5a03",
+                   mid_color = "green",
+                   high_color = "darkgreen"))
+
+map(data = wetlands |> left_join(vegmetrics, by = "SITE_ID") |> mutate(Value = N_TREE) |> filter(!is.na(Value)) |>
+      mutate(Value = if_else(Value == 0, NA, Value)),
+    map = state_map,
+    title = "Number of Tree Species in Wetlands",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    inset_style = "hidden",
+    caption_manual = "Source: 2021 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    continental = T,
+    obs_units = "Sites",
+    breaks = c(1.1, 4.1, 8.1),
+    labels_manual = c( "1", "2 to 4", "5 to 8", "9+"),
+    na_label = "0",
+    palette = list(na_color = "brown",
+                   mid_color = "green",
+                   high_color = "darkgreen"))
+
+map(data = wetlands |> left_join(vegmetrics, by = "SITE_ID") |> mutate(Value = FQAI_COV_ALL) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "Floristic Quality Index in Wetlands",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    inset_style = "hidden",
+    caption_manual = "Cover-weighted\nSource: 2021 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    continental = T,
+    obs_units = "Sites",
+    palette = list(mid_color = "lightgreen",
+                   high_color = "darkgreen"))
+```
+
+```{r}
+ph = read_csv(paste0(datapath_epa,"nwca21_waterchem_wide-data.csv")) |>
+  rename(RESULT = PH_RESULT) |>
+    filter(!is.na(RESULT)) |>
+  mutate(RESULT = 10^RESULT) |>
+  group_by(SITE_ID) |>
+  summarize(RESULT = mean(RESULT)) |>
+    ungroup() |>
+    mutate(RESULT = log10(RESULT))
+
+map(data = wetlands |> left_join(ph, by = "SITE_ID") |> rename(Value = RESULT) |> filter(!is.na(Value)),
+    map = state_map,
+    title = "pH of Wetlands",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2021 EPA National Wetlands Condition Assessment",
+    bubbles = F,
+    inset_style = "hidden",
+    breaks = c(0.5,1.5),
+    scale_center = 7,
+    inset_labels = list(top = "/n/ Most Alkaline", bottom = "/n/ Most Acidic"),
+    palette = list(low_color = "red",
+      mid_color = "lightgreen",
+                   high_color = "blue"))
+```
+
+#NCCA
+```{r}
+greatlakes = read_csv(paste0(datapath_epa, "ncca20_siteinfo_great_lakes_data.csv")) |> 
+  mutate(abbr = PSTL_CODE, 
+         name = paste0(GREAT_LAKE, ", ", abbr)) |> 
+  select(SITE_ID, LAT_DD83, LON_DD83, abbr, name)
+
+estuaries = read_csv(paste0(datapath_epa, "ncca20_siteinfo_estuaries_data_2.csv")) |>
+  mutate(abbr = PSTL_CODE,
+         FEAT_NM = str_replace_all(FEAT_NM, "_", " "),
+         FEAT_NM = toTitleCase(FEAT_NM),
+         name = paste0(FEAT_NM, ", ", abbr)) |> 
+  select(SITE_ID, LAT_DD83, LON_DD83, abbr, name)
+
+water_sites = rbind(greatlakes, estuaries)
+water_sites = convert_to_sf(water_sites)
+
+mercury_coast = read_csv(paste0(datapath_epa, "ncca20_hg_fishplug_data.csv")) |>
+  select(SITE_ID, RESULT) |>
+  mutate(RESULT = replace_na(RESULT, 0)) |>
+  group_by(SITE_ID) |>
+  summarise(RESULT = mean(RESULT)) |>
+  ungroup() |>
+  mutate(RESULT = RESULT/1000) # nanograms to micrograms
+
+mercury_rivers = read_csv(paste0(datapath_epa,"nrsa_1819_mercury_in_fish_tissue_plugs_-_data.csv")) |> 
+  select(SITE_ID, RESULT) |>
+  mutate(RESULT = replace_na(RESULT, 0)) |>
+  group_by(SITE_ID) |>
+  summarise(RESULT = mean(RESULT)) |>
+  ungroup()
+
+rivers = read_csv(paste0(datapath_epa, "NRSA_1819_landscape.csv")) |>
+  mutate(GNIS_NAME = if_else(is.na(GNIS_NAME), "Unnamed Creek", GNIS_NAME))
+data = read_csv(paste0(datapath_epa, "NRSA1819_Data_for_PopulationEstimates.csv")) |>
+  filter(DSGN_CYCLE == "2018-19") |>
+  convert_to_sf()
+rivers = data |>
+  left_join(rivers |> select(SITE_ID, GNIS_NAME), by = "SITE_ID") |>
+  rename(abbr = PSTL_CODE) |>
+  mutate(name = paste0(GNIS_NAME, ", ", abbr))
+
+#river is losing data because some sites aren't showing up in the Data_ForPopulationEstimates, coast isn't
+mercury_rivers = mercury_rivers |> left_join(rivers) |>
+  st_as_sf() |>
+  select(name, abbr, RESULT) |>
+  filter(!is.na(name)) #this allows us to map but doesn't really fix the issue
+mercury_coast = mercury_coast |> left_join(water_sites) |>
+  st_as_sf() |>
+  select(name, abbr, RESULT)
+
+map(data = mercury_coast |> rename(Value = RESULT),
+    map = state_map,
+    subtitle = "EPA standards: <0.15 µg/g: 3 servings/week; <0.23 µg/g: 2; <0.46 µg/g: 1",
+    title = "Mercury Concentration in Fish",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2020 EPA National Coastal Condition Assessment",
+    bubbles = F,
+    unit = "µg/g",
+    breaks = c(0.15, 0.23, 0.46),
+    obs_units = "Sites",
+    na_label = "Undetected")
+
+
+map(data = rbind(mercury_coast, mercury_rivers) |> rename(Value = RESULT),
+    map = state_map,
+    subtitle = "EPA standards: <0.15 µg/g: 3 servings/week; <0.23 µg/g: 2; <0.46 µg/g: 1",
+    title = "Mercury Concentration in Fish",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source 1: 2020 EPA National Coastal Condition Assessment\nSource 2: 2018-2019 EPA National Rivers and Streams Assessment",
+    bubbles = F,
+    unit = "µg/g",
+    breaks = c(0.15, 0.23, 0.46),
+    obs_units = "Sites",
+    na_label = "Undetected")
+
+#STATE LEVEL
+#these ones have empty breaks and subtitles don't make sense and coastal includes lakes idk what to call it
+
+state_fips = state_map |>
+  st_drop_geometry() |>
+  select(abbr, fips)
+
+map(data = mercury_rivers |>
+      st_drop_geometry() |>
+      group_by(abbr) |>
+      summarize(Value = mean(RESULT)) |>
+      ungroup() |>
+      left_join(state_fips) |>
+      select(Value, fips),
+    map = state_map,
+    subtitle = "EPA standards: <0.15 µg/g: 3 servings/week; <0.23 µg/g: 2; <0.46 µg/g: 1",
+    title = "Mercury Concentration in River Fish",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2020 EPA National Coastal Condition Assessment",
+    bubbles = F,
+    unit = "µg/g",
+    breaks = c(0.15, 0.23, 0.46))
+
+
+map(data = mercury_coast |>
+      st_drop_geometry() |>
+      group_by(abbr) |>
+      summarize(Value = mean(RESULT)) |>
+      ungroup() |>
+      left_join(state_fips) |>
+      select(Value, fips),
+    map = state_map,
+    subtitle = "EPA standards: <0.15 µg/g: 3 servings/week; <0.23 µg/g: 2; <0.46 µg/g: 1",
+    title = "Mercury Concentration in Ocean Fish",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: 2018-2019 EPA National Rivers and Streams Assessment",
+    bubbles = F,
+    unit = "µg/g",
+    breaks = c(0.15, 0.23, 0.46))
+
+```
+
+#Superfund Sites
+```{r}
+#https://www.epa.gov/superfund/superfund-data-and-reports
+
+#All proposed, current, and deleted
+
+NPLSites = read_xlsx(paste0(datapath_epa, "NPLSites.xlsx")) |>
+  mutate(y = as.numeric(`Primary Latitude`),
+         x = as.numeric(`Primary Longitude`)) |>
+  select(x, y, `Site Name`, State, `HRS Score`, `NPL Status`) |>
+  distinct() |>
+  rename(abbr = State) |>
+  filter(!abbr %in% c("PR", "GU", "VI", "AS", "MP")) |>
+  mutate(name = paste0(`Site Name`, ", ", abbr))
+NPLSites$geometry <- st_sfc(mapply(function(x, y) st_point(c(x, y)), NPLSites$x, NPLSites$y, SIMPLIFY = FALSE))
+NPLSites <- st_sf(NPLSites, crs = 4326) |> usmap_transform()
+
+#HRS = Hazard Ranking System
+
+
+
+map(data = NPLSites |> mutate(Type = fct_recode(NPLSites$`NPL Status`, "Active Sites" = "Currently on the Final NPL", "Closed Sites" = "Deleted from the Final NPL", "Proposed Sites" = "Proposed for NPL")),
+    map = state_map,
+    title = "Superfund Sites",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    inset_style = "hidden",
+    caption_manual = "Source: EPA National Priorities List",
+    bubbles = F
+    )
+
+NPL_state = NPLSites |>
+  st_drop_geometry() |>
+  group_by(`NPL Status`, abbr) |>
+  summarize(count = n()) |>
+  ungroup() |>
+  left_join(state_fips) |>
+  select(-abbr)
+
+map(data = NPL_state |> filter(`NPL Status` == "Currently on the Final NPL") |> mutate(Value = count),
+    map = state_map,
+    title = "Number of Active Superfund Sites by State",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: EPA National Priorities List",
+    bubbles = F,
+    na_to_0 = T,
+    breaks = c(5,10,20,50),
+    increment = 1)
+
+NPLSites |>
+  st_drop_geometry() |>
+  group_by(`NPL Status`) |>
+  summarize(count = n()) |>
+  ungroup()
+```
+
+#Lead in Drinking Water
+```{r}
+#https://sdwis.epa.gov/ords/sfdw_pub/r/sfdw/sdwis_fed_reports_public/35?p35_report2=LCR
+
+
+#groupby PWIS ID and average observations
+
+#find where to get coords of each water system
+
+#find out how far I need to go in the data to get a good sample
+
+#loop through 5 filepaths for the 5 most recent quarters: read in the data, clean it, then rbind
+
+water_systems = read_excel(paste0(datapath_epa,"Water System Summary_20250520.xlsx"))
+colnames(water_systems) <- water_systems[4, ] |> unlist() |> as.character()
+water_systems <- water_systems[-c(1:4), ]
+water_systems <- water_systems |>
+  mutate(pop = as.numeric(`Population Served Count`)) |>
+  filter(pop > 0,
+         !is.na(`Counties Served`)) %>%
+  separate_rows(`Counties Served`, sep = ",") %>%
+  mutate(`Counties Served` = trimws(`Counties Served`))
+
+water_systems <- water_systems |>
+  filter(!str_detect(`Counties Served`, "Municipio")) |>
+  mutate(county = case_when(str_detect(`Counties Served`, "Borough") ~ `Counties Served`,
+                            str_detect(`Counties Served`, "Census Area") ~ `Counties Served`,
+                            str_detect(`Counties Served`, "Parish") ~ `Counties Served`,
+                            str_detect(`Counties Served`, "city") ~ `Counties Served`,
+                            str_detect(`Counties Served`, "Municipality") ~ `Counties Served`,
+                            str_detect(`Counties Served`, "District") ~ `Counties Served`,
+         T ~ paste0(`Counties Served`, " County")))
+#there may be some issues with cross-state border systems here, need to check for that. County name wouldn't reflect a county in the right state because primacy agency can only be one state I think.
+
+clean_lead_data <- function(filename){
+  raw_data = read_excel(paste0(datapath_epa,filename))
+colnames(raw_data) <- raw_data[4, ] |> unlist() |> as.character()
+raw_data <- raw_data[-c(1:4), ]
+
+data <- raw_data |>
+  mutate(pop = as.numeric(`Population Served Count`),
+         lead_ppb = 1000*as.numeric(`Sample Measure (mg/L)`),
+         violation = (lead_ppb > 15))
+return(data)
+}
+lead1 = clean_lead_data("Lead Samples_20250520.xlsx") #2025Q1
+lead2 = clean_lead_data("Lead Samples_20250520_2.xlsx") #2023Q1
+
+lead = rbind(lead1, lead2)
+
+lead = lead |>
+  select(`Sampling End Date`, `PWS ID`, lead_ppb) |> #sampling end date is days since 12/30 1899
+  distinct() |>
+  group_by(`PWS ID`) |>
+  # slice_max(order_by = `Sampling End Date`, n=1) |>
+  summarize(lead_ppb = mean(lead_ppb)) |>
+  ungroup()
+
+lead_county_data = water_systems |>
+  left_join(lead |> select(`PWS ID`, lead_ppb), by = "PWS ID") |>
+  filter(`PWS Type` == "Community water system") |>
+  rename(state = `Primacy Agency`) |>
+  mutate(county = case_when(county == "Baltimore city" ~ "Baltimore City",
+                            county == "St. Louis city" ~ "St. Louis City",
+                            county == "La Salle Parish" ~ "LaSalle Parish",
+                            county == "Shannon County" & state == "South Dakota" ~ "Oglala Lakota County",
+                            county == "Dona Ana County" ~ "Doña Ana County",
+                            county == "Wade Hampton Census Area" ~ "Kusilvak Census Area",
+                            T ~ county)) |>
+  filter(!is.na(lead_ppb)) |>  
+  group_by(state, county) |>
+  slice_max(pop, n=1) |> #get just the biggest water system in each county for which we have data
+  ungroup() |>
+  left_join(state_names, by = join_by("state" == "name")) |>
+  left_join(county_map |> #get fips codes from county names
+  st_drop_geometry() |>
+  select(fips, county, abbr),
+  by = c("abbr", "county")
+  )
+
+map(data = lead_county_data |> filter(!is.na(fips)) |> rename(Value = lead_ppb),
+    map = county_map,
+    title = "Lead Concentration in Each County's Biggest Water Utility", #apostrophes in title cause error with the line that opens the map
+    subtitle = "EPA Maximum Contaminant Level Goal: 0 ppb; Action Level: 15 ppb",
+    unit = "ppb",
+    state_map = state_map,
+    graphicspath = graphicspath_epa,
+    source = "EPA",
+    caption_manual = "Source: EPA Safe Drinking Water Information System",
+    bubbles = F,
+    breaks = c(1,5,15),
+    palette = list(mid_color = "lightblue",
+                   high_color = "darkblue"))
+```
+
+
+
+
