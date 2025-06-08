@@ -60,14 +60,38 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
     inset_data <- inset_data |>
       arrange(Value)
   }
+
   
-  inset_data <- inset_data |>
-    slice(1:n) |>
+#deepseek code
+ inset_data <- inset_data |>
     mutate(
-      rank = as.character(row_number()),
-      rank = if_else(as.numeric(rank) < 10, paste0(rank, ".   "), paste0(rank, ". "))
+      rank_value = min_rank(if (style == "top") desc(Value) else Value),
+      rank = as.character(rank_value),
+      rank = if_else(rank_value < 10, paste0(rank, ".   "), paste0(rank, ". "))
     )
-  n = nrow(inset_data) #in case there are less than 10 observations (needed for some state maps)
+  
+  # Expand n if ties would push us beyond requested number
+  last_rank_value <- inset_data$rank_value[min(n, nrow(inset_data))]
+  actual_n <- sum(inset_data$rank_value <= last_rank_value)
+  
+  if (actual_n > n) {
+    n <- actual_n
+    message("Expanding inset to ", n, " observations due to ties.\n")
+  }
+  
+  # Keep only top n (now including all ties at cutoff)
+  inset_data <- inset_data |>
+    filter(rank_value <= last_rank_value)
+ 
+  
+  
+  # inset_data <- inset_data |>
+  #   slice(1:n) |>
+  #   mutate(
+  #     rank = as.character(row_number()),
+  #     rank = if_else(as.numeric(rank) < 10, paste0(rank, ".   "), paste0(rank, ". "))
+  #   )
+  # n = nrow(inset_data) #in case there are less than 10 observations (needed for some state maps)
   
   if(hide_values){
     inset_data <- inset_data |>
@@ -413,8 +437,6 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
 
 #choropleth_map
 ```{r}
-#add Type functionality
-#currently there needs to be a Value column or the code crashes, but adding all 1s or whatever prevents crash with no side effects
 choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, dollar, unit, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, increment) {
   
   if ("Type" %in% data_type) {
@@ -480,7 +502,11 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
     # }
   if (is.na(labels_manual[1])) {
     #increment argument (0 by default)
-  
+    
+    if (increment != 1 && all(map |> filter(!is.na(Value)) |> pull(Value) %% 1 == 0)) {
+  cat("Data appears to be discrete. Recommended to set increment to 1.\n")
+    }
+    
   lower_breaks <- head(breaks, -1)
   upper_breaks <- breaks[-1]
   if (!show_endpoints) {
@@ -488,7 +514,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
     middle_labels <- paste0(dollar, sapply(lower_breaks[-1] + increment, shorten), " to ", 
                              dollar, sapply(upper_breaks[-1], shorten), unit)
       formatted_labels <- c(first_label, middle_labels)
-      formatted_labels[length(formatted_labels)] <- paste0(">", dollar, shorten(lower_breaks[length(lower_breaks)]), unit)
+      formatted_labels[length(formatted_labels)] <- paste0(if_else(increment == 0, ">", "≥"), dollar, shorten(lower_breaks[length(lower_breaks)] + increment), unit)
     
   } else {
     # If showing endpoints, use exact values without increment adjustment
@@ -950,7 +976,11 @@ compute_bubble_breaks <- function(values) { # This is for finding good bubble si
   }
   return(breaks)
 }
-compute_breaks <- function(values, n){
+compute_breaks <- function(values, n_breaks){
+  values = sort(values)
+  top10 = values[1:10]
+  diffs = top10[1:9] - top10[2:10]
+  values = values[1:(length(values) - which.max(diffs) + 1)]
   max_value <- max(values, na.rm = TRUE)
   min_value <- max(min(values , na.rm = TRUE), 0.00001)
   powers_of_10 <- 10^(floor(log10(min_value)):floor(log10(max_value)))
@@ -959,7 +989,7 @@ compute_breaks <- function(values, n){
   potential_breaks = potential_breaks[potential_breaks > min_value] #take out breaks below min value
   #maybe something where if only one observation is in the top break, then drop it
   breaks <- sort(unique(potential_breaks))
-  breaks = tail(breaks, n-1)
+  breaks = tail(breaks, n_breaks-1)
   breaks = c(round_to_sigfigs(min(values, na.rm = TRUE), 2, "floor"),
                   breaks,
                   round_to_sigfigs(max(values, na.rm = TRUE), 2, "ceiling"))
