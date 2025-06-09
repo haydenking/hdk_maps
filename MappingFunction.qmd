@@ -678,7 +678,7 @@ map <- map |>
 #handle ties in the inset
 #global sigfig parameter
 #good documentation
-map <- function(data, map, state_map = NULL, title, source, font_size = NA, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, graphicspath, palette = list(), inset_cutoff = -1000000000, cutoff_column = "Value", breaks = NA, na_to_0 = F, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T, v_adj = 0, increment = 0) {
+map <- function(data, map, state_map = NULL, title, source, font_size = NA, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, palette = list(), inset_cutoff = -1000000000, cutoff_column = "Value", breaks = NA, na_to_0 = F, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T, v_adj = 0, increment = 0) {
   
   palette = set_palette(palette)
   
@@ -755,8 +755,10 @@ if("fips" %in% colnames(data)){
   } else {
     caption = ""
   }
+  
   caption <- paste0(caption, caption_manual)
-    
+
+  
   if (per == "capita" & length(years) > 1 | per == "year") {
     num_years_ct = length(years[years < 2022]) #we don't have post-2021 data for CT due to the switch to planning regions, but I should write this better for post-2021 maps, but that is difficult without requiring that the data argument be un-aggregated by year
     num_years_notct = length(years)
@@ -916,10 +918,23 @@ if("fips" %in% colnames(data)){
   }
   
   plot <- add_theme(plot, title, palette, subtitle, font_size, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag, level, inset_box, v_adj)
-  
+  #Maps go in map folder, sub-folders named by source
+  graphicspath = paste0("Maps/", source, "/")
+  if(!dir.exists(graphicspath)){
+    #prompt user to create folder
+    createfolder = ""
+    while(!createfolder %in% c("Y", "N")){
+      createfolder = readline(prompt = paste0("Create folder '", source ,"'?[Y/N]\n"))
+      if(createfolder == "Y"){
+        dir.create(graphicspath, recursive = T) #recursive = T means that it will create the Maps folder too if it is missing
+      } else if(createfolder == "N"){
+        graphicspath = ""
+        cat("Outputting map to working directory.\n")
+      }
+    }
+  }
   filepath = paste0(graphicspath, str_remove_all(title, "[ ']"), source, "_", level, ".jpg")
   ggsave(filename = filepath, plot = plot, dpi = dpi, width = 10, height = 10) #set dpi to 100 for a cool retro look
-  
   system2("open", filepath)
 }
 ```
@@ -980,9 +995,9 @@ compute_breaks <- function(values, n_breaks){
   values = sort(values)
   top10 = values[1:10]
   diffs = top10[1:9] - top10[2:10]
-  values = values[1:(length(values) - which.max(diffs) + 1)]
-  max_value <- max(values, na.rm = TRUE)
-  min_value <- max(min(values , na.rm = TRUE), 0.00001)
+  cut_values = values[1:(length(values) - which.max(diffs) + 1)]
+  max_value <- max(cut_values, na.rm = TRUE)
+  min_value <- max(min(cut_values , na.rm = TRUE), 0.000001)
   powers_of_10 <- 10^(floor(log10(min_value)):floor(log10(max_value)))
   potential_breaks = c(powers_of_10, 2*powers_of_10, 5*powers_of_10)
   potential_breaks = potential_breaks[potential_breaks < max_value] #take out breaks above max value
@@ -990,9 +1005,9 @@ compute_breaks <- function(values, n_breaks){
   #maybe something where if only one observation is in the top break, then drop it
   breaks <- sort(unique(potential_breaks))
   breaks = tail(breaks, n_breaks-1)
-  breaks = c(round_to_sigfigs(min(values, na.rm = TRUE), 2, "floor"),
+  breaks = c(round_to_sigfigs(min(values), 2, "floor"),
                   breaks,
-                  round_to_sigfigs(max(values, na.rm = TRUE), 2, "ceiling"))
+                  round_to_sigfigs(max(values), 2,"ceiling"))
   cat("Auto breaks: ", breaks, "\n")
   return(breaks)
 }
@@ -1086,7 +1101,6 @@ set_palette <- function(user_palette) {
   return(modifyList(default_palette, user_palette))
 }
 ```
-
 
 #merge_by_MSA
 ```{r}
