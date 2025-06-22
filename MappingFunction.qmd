@@ -20,15 +20,475 @@ library(viridis)
 ```
 
 ```{r}
-#maybe look into using these, especially part 3
+#after writing 1000+ loc I found out much of this functionality is already built :/
+#But building off of these functions wouldn't allow me to do all the things I want to do so I will keep building on this
 # vignette("usmap1", package = "usmap") # 1. Introduction
 # vignette("usmap2", package = "usmap") # 2. Mapping the US
 # vignette("usmap3", package = "usmap") # 3. Advanced Mapping
 ```
 
+
+###map
+```{r}
+#put error handling in separate function?
+#global sigfig parameter
+#good documentation
+map <- function(data, map, state_map = NULL, title, source, font_size = NA, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, palette = list(), inset_cutoff = -1000000000, cutoff_column = "Value", breaks = NA, na_to_0 = F, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T, v_adj = 0, increment = 0) {
+  
+  palette = set_palette(palette)
+  
+  if(nrow(data) == 0){
+    stop("Data has 0 rows")
+  }
+  
+if("fips" %in% colnames(data)){
+  if (all(nchar(data$fips) == 2)) { #2 digit fips codes for states
+  level <- "state"
+} else if (all(nchar(data$fips) == 5)) { #5 digit fips codes for counties
+  level <- "county"
+} else {
+  stop("FIPS codes are invalid.")
+}
+} else if("metro_name" %in% colnames(map)){
+  level <- "MSA" #this option is if we are already merged by MSA, otherwise level is set to county first, then changes to MSA after we merge by MSA
+} else if("zip_code" %in% colnames(data)) {
+  level <- "ZIP"
+  map <- map |>
+    rename(fips = zip_code) #this is lazy but it works
+} else if("geometry" %in% colnames(data)){ #geometry is the centroid in this case
+  level <- "freefloating"
+} else {
+  stop("Data level not recognized.")
+}
+  cat("Level: ", level, "\n")
+  
+  if("Type" %in% colnames(data) & "Value" %in% colnames(data)){
+    data_type = c("Type", "Value")
+  } else if("Value" %in% colnames(data)){
+    data_type = "Value"
+  } else if("Type" %in% colnames(data)){
+    data_type = "Type"
+    bubbles = F #Bubble map cannot be created when only Type and not Value is supplied
+  } else {
+    stop("data must have Value and/or Type column.")
+  }
+  if(is.na(scale_center) & "Value" %in% data_type){
+    if(min(data$Value, na.rm = T) < 0){
+      cat("Warning: negative Values in data\n")
+    }
+  }
+  if("Value" %in% data_type) {
+    data <- data |>
+      mutate(Value = Value * scale_factor) #for scaling (ex. scale_factor = 100000 for rate per 100000)
+  }
+  
+  if(logratio){ #log ratio: use with migration type = "net", supply breaks as log of the positive ratios you want as breaks ex. c(log(1.1), log(1.3), log(1.5))
+    per = "" #anything else would be silly
+    unit = ":1"
+  }
+  
+  #this code kind of sucks but idk how exactly i should handle this without adding a bunch of extra parameters
+  
+  caption = ""
+  
+  if (source == "USDA") {
+    caption <- "Source: USDA Agriculture Census"
+  } else if (source == "IRS") {
+    if(is.na(years)[1]){ 
+      years = 2012:2022 #default (data I have right now)
+      first_year <- min(years)
+      last_year <- max(years)
+      cat("Using default years for IRS data: 2012-2022")
+    }
+    if(last_year > 2021 & first_year < 2021){
+       caption = paste0("Connecticut data is ",first_year,"-",2021,"\n")
+    }
+    caption <- paste0(caption, "Source: ",first_year, "-", last_year," IRS Migration Data")
+  } else if (source == "ACS") {
+    if(is.na(years)[1]){
+      years = 2011:2020 #default
+      first_year <- min(years)
+      last_year <- max(years)
+      cat("Using default years for ACS data: 2011-2020\n")
+    }
+    caption <- "Source: ACS Migration Data"
+  } else if(!is.na(years)[1]){
+    #years should be a list of years. It can be specified 2019:2022 for example
+    first_year <- min(years)
+    last_year <- max(years)
+    if(length(years) == 1){
+      caption = paste0("Year: ", first_year, "\n", caption)
+    } else {
+      caption = paste0("Years: ", first_year, "-", last_year, "\n", caption)
+    }
+  }
+    
+  caption_manual <- ifelse(!str_detect(caption_manual, "\n$") & caption_manual != "" & caption != "", str_c(caption_manual, "\n"), caption_manual) #make sure manual caption ends in \n
+  
+  caption <- paste0(caption_manual, caption)
+  caption = str_remove(caption, "\n$") #make sure caption doesn't end in new line
+  
+  if (per == "capita" & length(years) > 1 | per == "year") {
+    num_years_ct = length(years[years < 2022]) #we don't have post-2021 data for CT due to the switch to planning regions, but I should write this better for post-2021 maps, but that is difficult without requiring that the data argument be un-aggregated by year
+    num_years_notct = length(years)
+    data <- data |>
+      mutate(num_years = if_else(substr(fips, 1, 2) == "09" & level != "state", num_years_ct, num_years_notct), #CT
+        Value = Value / num_years
+      )
+    subtitle <- if_else(is.na(subtitle) & per == "year", "Rate per year", subtitle)
+  }
+  
+  if (!is.na(region_fips)[1]) {
+      region = map |>
+        filter(fips %in% region_fips) |>
+        st_union()
+  } else{
+    region = NA
+  }
+  keep_cols = c("fips", data_type, cutoff_column, "geometry")
+  if(level %in% c("freefloating", "MSA")){
+    keep_cols = c(keep_cols, "name", "abbr")
+  }
+  data <- keep_columns(data, keep_cols)
+  
+  if(level == "MSA"){ #this option is for if data are already merged by MSA, otherwise county_map is supplied for map and merge_MSAs is true
+    map = map |> #for MSA map we need to join by name because of non-metro counties
+      full_join(data, by = join_by(metro_name == name)) |>
+      rename(name = metro_name) #streamline this later
+  } else if(level == "freefloating"){
+    map = data #this should have Value and/or Type, geometry, name, abbr
+  } else {
+    map <- map |>
+      full_join(data, by = "fips")
+  } #Switched to full_join here to keep PR so that it can be in the inset at least. I don't think it will mess with the mapping.
+    if("Value" %in% data_type){
+    map <- map |>
+      mutate(cutoff = !!rlang::sym(cutoff_column))
+    }
+  if(merge_MSAs){
+    if("Type" %in% data_type){
+      stop("Categorical data can't be merged by MSA.")
+    } else if(level == "county"){ #merge_by_MSA merges a county_map by MSA
+      map = merge_by_MSA(map, region_fips)
+      level = "MSA"
+    } else if(level == "MSA"){
+      cat("Map merged by MSA already supplied, ignoring Merge_MSAs argument.")
+    } else {
+      stop("Only county level can be merged by MSA.")
+    }
+  }
+  
+  if (na_to_0 & "Value" %in% data_type) {
+    map <- map |>
+      mutate(Value = replace_na(Value, 0))
+  } 
+
+  dollar <- ""
+  if (str_detect(unit, "\\$")) {
+    dollar <- "$"
+    unit <- str_remove(unit, "\\$")
+  } else if (unit == "%") {
+    map <- map |>
+      mutate(Value = 100 * Value)
+  } else if (!str_detect(unit, "$[/:]")) {#ratios and rates don't have the space before
+    unit <- paste0(" ", unit)
+  }
+  
+    if(per %in% c("capita", "capita_total", "year")){ #use capita_total to divide by population over a period of time but not year (ex. for cumulative % population changes over multiple years)
+      if(is.na(years)[1]){
+        stop("Specify which years the data are for.")
+      }
+      pop_cols <- paste0("pop", substr(years, 3, 4))
+      map <- map %>%
+        rowwise() %>%
+        mutate(
+          avg_pop = mean(c_across(all_of(pop_cols)), na.rm = T), #at worst we're chopping off 2 years at the end so it isn't a big deal for now
+          avg_pop = ifelse(is.na(avg_pop) | avg_pop == 0, pop, avg_pop), # Default to "pop" if missing
+          pop = avg_pop #if pop is the inset cutoff this matters
+        ) %>%
+        ungroup()
+    }
+  if("Value" %in% data_type){
+  per_capita_result <- handle_per(map, source, per, subtitle, scale_factor)
+  map <- per_capita_result$map
+  subtitle <- per_capita_result$subtitle
+  } else {
+  inset_style = "hidden"
+}
+  if (inset_style == "hidden") {
+    inset_text <- ""
+  } else{ 
+    obs_units = case_when(obs_units != "auto" ~ obs_units,
+                      level == "county" ~ "Counties",
+                      level == "MSA" ~ "Counties/MSAs",
+                      level == "state" ~ "States",
+                      level == "ZIP" ~ "ZIP Codes",
+                      T ~ "")
+    if (inset_style %in% c("top", "bottom")) {
+    inset_text <- create_inset(map, level, inset_style, 10, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels, obs_units)
+  } else if (inset_style == "split") {
+    top <- create_inset(map, level, "top", 5, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels, obs_units)
+    bottom <- create_inset(map, level, "bottom", 5, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels, obs_units)
+    inset_text = paste0(top, "\n",bottom)
+    }
+  }
+  drop_cols = c("PR", "GU", "VI", "AS", "MP")
+  
+  #THIS WILL CRASH ZIP MAP UNTIL FIXED
+    if (continental) { #filter out AK and HI after inset
+      if("abbr" %in% colnames(map)) {
+        drop_cols = c(drop_cols, "AK", "HI")
+      } else{
+     map <- map |>
+      filter(!str_detect(name, ", HI$"),
+             !str_detect(name, ", AK$"),
+             !str_detect(name, ", PR$"),
+             !str_detect(name, ", VI$"),
+             !str_detect(name, ", GU$"),
+             !str_detect(name, ", AS$"),
+             !str_detect(name, ", MP$"))  
+      }
+  state_map <- state_map |>
+    filter(!abbr %in% c("AK", "HI"))
+  }
+  
+  if("abbr" %in% colnames(map)){
+    map <- map |>
+      filter(!abbr %in% drop_cols) 
+  } 
+  map <- map |>
+    filter(!st_is_empty(geometry))
+  
+  if (bubbles) {
+    if(is.na(max_bubble_size)){
+    max_bubble_size = auto_mbs(map)
+  }
+    plot <- bubble_map(map, state_map, level, max_bubble_size, palette, borders, dollar, unit, region, scale_center, plusminus_labels, data_type)
+  } else{
+    if(is.na(max_bubble_size) & level == "freefloating"){
+    max_bubble_size = min(2.5, max(1.5,10/log(nrow(map))))
+  }
+    choropleth <- choropleth_map(map, state_map, level, breaks, labels_manual, palette, borders, dollar, unit, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, increment)
+    plot = choropleth$plot
+    breaks = choropleth$breaks
+  }
+  
+  plot <- add_theme(plot, title, palette, subtitle, font_size, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag, level, inset_box, v_adj)
+  #Maps go in map folder, sub-folders named by source
+  graphicspath = paste0("Maps/", source, "/")
+  if(!dir.exists(graphicspath)){
+    #prompt user to create folder
+    createfolder = ""
+    while(!createfolder %in% c("Y", "N")){
+      createfolder = readline(prompt = paste0("Create folder '", source ,"'?[Y/N]\n"))
+      if(createfolder == "Y"){
+        dir.create(graphicspath, recursive = T) #recursive = T means that it will create the Maps folder too if it is missing
+      } else if(createfolder == "N"){
+        graphicspath = ""
+        cat("Outputting map to working directory.\n")
+      }
+    }
+  }
+  filepath = paste0(graphicspath, str_remove_all(title, "[ ']"), source, "_", level, ".jpg")
+  ggsave(filename = filepath, plot = plot, dpi = dpi, width = 10, height = 10) #set dpi to 100 for a cool retro look
+  system2("open", filepath)
+}
+```
+
+#helper functions
+```{r}
+keep_columns <- function(df, cols_to_keep) {
+  existing_cols <- intersect(cols_to_keep, colnames(df))
+  return(df[, existing_cols, drop = FALSE])
+}
+auto_mbs = function(map){
+  map <- map |>
+    mutate(abs_value = abs(Value))
+  max = max(map$abs_value, na.rm = T)
+  bubble <- map |>
+    select(abs_value) |>
+    mutate(normalized_bubble_size = abs_value / max,
+           normalized_bubble_size = replace_na(normalized_bubble_size, 0))
+  inflation_factor = 3000 / sum(bubble$normalized_bubble_size) #3000 was arrived at by trial and error, and doesn't work well for maps where the data is all clustered in one area
+  max_bubble_size = sqrt(max(bubble$normalized_bubble_size) * inflation_factor) #bubble size is in terms of radius not area
+  cat("Auto max bubble size: ", max_bubble_size, "\n")
+  return(max_bubble_size)
+}
+#computes midpoint color
+midpoint_rgb <- function(color1, color2, weight1) {
+  if(weight1 < 0 | weight1 > 1){
+    stop("weight1 is the weighting on the first color and must be between 0 and 1.\n")
+  }
+    col1 <- col2rgb(color1)
+    col2 <- col2rgb(color2)
+    mid_rgb <- weight1 * col1 + (1-weight1) * col2  # Biased the mix towards the mid_color so you can see the bubbles better
+    rgb(mid_rgb[1], mid_rgb[2], mid_rgb[3], maxColorValue = 255)
+}
+calculate_brightness <- function(color) {
+  rgb_values <- col2rgb(color) / 255  # Normalize RGB values to [0,1]
+  return(0.299 * rgb_values[1] + 0.587 * rgb_values[2] + 0.114 * rgb_values[3])  # Brightness formula
+}
+compute_bubble_breaks <- function(values) { # This is for finding good bubble sizes for the legend
+  max_value <- max(values, na.rm = TRUE)
+  min_value <- max(min(values , na.rm = TRUE),1)
+  
+  # Get the powers of 10 between min_value and max_value
+  powers_of_10 <- 10^(ceiling(log10(min_value)):floor(log10(max_value)))
+  
+  if (max_value > 5 * max(powers_of_10)) {
+    powers_of_10 <- c(powers_of_10, 5 * max(powers_of_10))
+  } else if(max_value > 2 * max(powers_of_10)){
+    powers_of_10 <- c(powers_of_10, 2 * max(powers_of_10))
+  }
+  
+  breaks <- sort(unique(powers_of_10))
+  if (length(breaks) > 3) {
+    breaks <- tail(breaks, 3) # No more than 3 bubbles in legend
+  }
+  return(breaks)
+}
+
+compute_breaks <- function(values, n_breaks){
+  values = sort(values)
+  if(length(values) > 10){
+    n = min(ceiling(length(values)/10), 10)
+    topn = values[1:n]
+    diffs = topn[1:n-1] - topn[2:n]
+    cut_values = values[1:(length(values) - which.max(diffs) + 1)]
+  }else {
+    cut_values = values
+  }
+  max_value <- max(cut_values, na.rm = TRUE)
+  min_value <- max(min(cut_values , na.rm = TRUE), 0.000001)
+  powers_of_10 <- 10^(floor(log10(min_value)):floor(log10(max_value)))
+  potential_breaks = c(powers_of_10, 2*powers_of_10, 5*powers_of_10)
+  potential_breaks = potential_breaks[potential_breaks < max_value] #take out breaks above max value
+  potential_breaks = potential_breaks[potential_breaks > min_value] #take out breaks below min value
+  #maybe something where if only one observation is in the top break, then drop it
+  breaks <- sort(unique(potential_breaks))
+  breaks = tail(breaks, n_breaks-1)
+  breaks = c(round_to_sigfigs(min(values), 2, "floor"),
+                  breaks,
+                  round_to_sigfigs(max(values), 2,"ceiling"))
+  cat("Auto breaks: ", breaks, "\n")
+  return(breaks)
+}
+
+remove_empty_breaks <- function(map, breaks){ #this code tends to cause issues. should rewrite 
+  data <- map$Value
+  
+  # Always include the first break (minimum value)
+  adjusted_breaks <- c(breaks[1])
+  
+  # Iterate through the breaks starting from the second break
+  for (i in 2:(length(breaks) - 1)) {
+    # Check if there are any values between the previous break and the current break
+    if (any(data >= breaks[i - 1] & data < breaks[i], na.rm = TRUE)) {
+      # if there are, keep the current break
+      adjusted_breaks <- c(adjusted_breaks, breaks[i])
+    }
+  }
+  
+  # Always include the last break (maximum value)
+  adjusted_breaks <- c(adjusted_breaks, breaks[length(breaks)])
+  adjusted_breaks = unique(adjusted_breaks) #so that the last break doesn't end up in there twice
+  
+  return(adjusted_breaks)
+}
+
+# For nice-looking breakpoints for a choropleth legend (I usually hide endpoints now, but it's still good to have this functionality)
+round_to_sigfigs <- function(value, sigfigs, method = c("floor", "ceiling")) {
+  method <- match.arg(method)
+  if (value == 0) return(0)
+  
+  # Calculate the scale factor based on the significant figures
+  scale_factor <- 10^(floor(log10(abs(value))) - (sigfigs - 1))
+  
+  if (method == "floor") {
+    return(floor(value / scale_factor) * scale_factor)
+  } else if (method == "ceiling") {
+    return(ceiling(value / scale_factor) * scale_factor)
+  }
+}
+append_unit <- function(dollar, unit) {
+  function(x)
+    paste0(dollar, comma_format()(x), unit)
+}
+
+#I don't like the way this one handles values between 1 and 10, leaving an extra .0 on there when it's a whole number
+
+# shorten <- function(x) {
+#   label_number(
+#     scale_cut = cut_short_scale(),
+#     accuracy = case_when(abs(x) >= 10 ~ 1,
+#                          abs(x) >= 1 ~ 0.1,
+#                          T ~ 0.01)
+#   )(x)
+# }
+
+shorten <- function(value) {
+  if (is.na(value)) return("")
+
+  abs_val <- abs(value)
+
+    if (abs_val >= 1000 && abs_val < 10000) {
+    return(comma_format()(round(value)))
+  }
+
+  # Thresholds and suffixes
+  thresholds <- c(1e12, 1e9, 1e6, 1e3)
+  suffixes   <- c("t",   "b",  "m",  "k")
+
+  for (i in seq_along(thresholds)) {
+    if (abs_val >= thresholds[i]) {
+      display_value = value / thresholds[i]
+      if(display_value >= 100) sigfigs = 3 else sigfigs = 2
+      return(paste0(signif(display_value, sigfigs), suffixes[i]))
+    }
+  }
+    return(as.character(signif(value, 2)))
+}
+
+type_colors <- function(n_types){
+    # if(n_types <= 8) {
+    #   type_colors <- RColorBrewer::brewer.pal(n_types, "Dark2")
+    # } else {
+    #   type_colors <- viridis(n_types)
+    # }
+    if(n_types < 4) {
+      type_colors <- c( "#007f7f", "#0000ff", "#00ff00")[1:n_types]
+    } else {
+      type_colors <- viridis(n_types+1)[1:n_types] #so that the highest break isn't bright yellow
+    }
+  return(type_colors)
+}
+# c("#9bff00", "#9900ff", "#009b9b")
+```
+
+#set_palette
+```{r}
+#add different palette options later
+set_palette <- function(user_palette) {
+  default_palette <- list(
+    "high_color" = "red", #forestgreen
+    "mid_color" = "#FFE5B4",  # #ECE4D5 #e0df9b
+    "low_color" = "blue", #  #CC5500
+    "background_color" = "#E8DACC",# #f1e0cf
+    "title_color" = "#363c45",
+    "text_color" = "#363c45",
+    "highlight_color" = "steelblue",
+    "na_color" = "gray80"
+  )
+  return(modifyList(default_palette, user_palette))
+}
+```
+
 #create_inset
 ```{r}
 create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels, obs_units) {
+  
+  style <- match.arg(style)
+  
   if(style == "top" & min(map$Value, na.rm = T) < 0){
     dollar = paste0("+",dollar)
   }
@@ -61,8 +521,6 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
       arrange(Value)
   }
 
-  
-#deepseek code
  inset_data <- inset_data |>
     mutate(
       rank_value = min_rank(if (style == "top") desc(Value) else Value),
@@ -70,28 +528,16 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
       rank = if_else(rank_value < 10, paste0(rank, ".   "), paste0(rank, ". "))
     )
   
-  # Expand n if ties would push us beyond requested number
+  # Expand n if ties would push beyond requested number
   last_rank_value <- inset_data$rank_value[min(n, nrow(inset_data))]
-  actual_n <- sum(inset_data$rank_value <= last_rank_value)
-  
-  if (actual_n > n) {
-    n <- actual_n
-    message("Expanding inset to ", n, " observations due to ties.\n")
-  }
   
   # Keep only top n (now including all ties at cutoff)
   inset_data <- inset_data |>
     filter(rank_value <= last_rank_value)
- 
-  
-  
-  # inset_data <- inset_data |>
-  #   slice(1:n) |>
-  #   mutate(
-  #     rank = as.character(row_number()),
-  #     rank = if_else(as.numeric(rank) < 10, paste0(rank, ".   "), paste0(rank, ". "))
-  #   )
-  # n = nrow(inset_data) #in case there are less than 10 observations (needed for some state maps)
+  if(nrow(inset_data) > n){
+    message("Expanding inset to ", n, " observations due to ties.\n")
+  }
+  n = nrow(inset_data) #in case there are less than 10 observations (needed for some state maps) or ties in inset
   
   if(hide_values){
     inset_data <- inset_data |>
@@ -252,7 +698,7 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
     textGrob(
       inset_text,
       x = x_pos,
-      y = y_pos + v_adj,
+      y = y_pos + v_adj, #use v_adj when freefloating map has messed up alignment to get caption and inset back to where they should be
       just = c("left", "bottom"),
       gp = gpar(
         fontsize = inset_font_size,
@@ -473,17 +919,23 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
                   round_to_sigfigs(max(map$Value, na.rm = TRUE), 2, "ceiling"))
       
       breaks <- sort(breaks)
+      num_breaks = length(breaks)
       
     } else {
       num_data_points = map |>
         filter(!is.na(Value), Value != 0) |>
         nrow()
-      num_breaks = max(4, min(7, ceiling(num_data_points^0.5)))
-      breaks = compute_breaks(map$Value, 6)
+      num_breaks = if_else(num_data_points > 20, 5, 4)
+      breaks = compute_breaks(map$Value, num_breaks) #previously did 6 breaks but that is too many I think
     }
     
     if(is.na(scale_center)){
       breaks = remove_empty_breaks(map, breaks)
+      if(num_breaks - length(breaks) > 0){
+        num_breaks = num_breaks + (num_breaks - length(breaks)) #add number of removed breaks
+        breaks = compute_breaks(map$Value, num_breaks)
+        breaks = remove_empty_breaks(map, breaks)
+      }
     }
     
     # if (is.na(labels_manual[1])) {
@@ -510,7 +962,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
   lower_breaks <- head(breaks, -1)
   upper_breaks <- breaks[-1]
   if (!show_endpoints) {
-    first_label <- paste0("≤", dollar, shorten(upper_breaks[1]), unit)
+    first_label <- paste0(if_else(increment == 0, "<", "≤"), dollar, shorten(upper_breaks[1]), unit)
     middle_labels <- paste0(dollar, sapply(lower_breaks[-1] + increment, shorten), " to ", 
                              dollar, sapply(upper_breaks[-1], shorten), unit)
       formatted_labels <- c(first_label, middle_labels)
@@ -625,7 +1077,7 @@ add_state_labels <- function(plot, map, palette, dollar, unit){
     adjustments <- tibble::tibble( #these adjustments are needed for labels but aren't good bubble locations
   abbr = c("NH", "MA", "CT", "NJ","MD", "RI", "DE", "IN", "VT"), # Indiana adjustment is just so it doesn't overlap with Illinois for long labels
   x_adj = c(-5000, 40000, -35000, 10000, 10000, 10000, 0, 0, -20000),
-  y_adj = c(110000, 20000, -20000, -10000, -30000, 10000, 0, 35000, 40000)
+  y_adj = c(110000, 20000, -20000, -10000, -30000, 10000, 0, 35000, 30000)
 )
 
     unit = if(unit == "%") "%" else "" #any other unit would take up too much space
@@ -668,437 +1120,6 @@ map <- map |>
                            aes(x = x, y = y, label = label),
                            box.padding = 2, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100)
       return(plot)
-}
-```
-
-###map
-```{r}
-#put error handling in separate function?
-#trim aleutian islands off of alaska?
-#handle ties in the inset
-#global sigfig parameter
-#good documentation
-map <- function(data, map, state_map = NULL, title, source, font_size = NA, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, palette = list(), inset_cutoff = -1000000000, cutoff_column = "Value", breaks = NA, na_to_0 = F, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T, v_adj = 0, increment = 0) {
-  
-  palette = set_palette(palette)
-  
-  if(nrow(data) == 0){
-    stop("Data has 0 rows")
-  }
-  
-if("fips" %in% colnames(data)){
-  if (all(nchar(data$fips) == 2)) { #2 digit fips codes for states
-  level <- "state"
-} else if (all(nchar(data$fips) == 5)) { #5 digit fips codes for counties
-  level <- "county"
-} else {
-  stop("FIPS codes are invalid.")
-}
-} else if("metro_name" %in% colnames(map)){
-  level <- "MSA" #this option is if we are already merged by MSA, otherwise level is set to county first, then changes to MSA after we merge by MSA
-} else if("zip_code" %in% colnames(data)) {
-  level <- "ZIP"
-  map <- map |>
-    rename(fips = zip_code) #this is lazy but it works
-} else if("geometry" %in% colnames(data)){ #geometry is the centroid in this case
-  level <- "freefloating"
-} else {
-  stop("Data level not recognized.")
-}
-  cat("Level: ", level, "\n")
-  
-  if("Type" %in% colnames(data) & "Value" %in% colnames(data)){
-    data_type = c("Type", "Value")
-  } else if("Value" %in% colnames(data)){
-    data_type = "Value"
-  } else if("Type" %in% colnames(data)){
-    data_type = "Type"
-    if(bubbles){
-      stop("Bubble map cannot be created when only Type and not Value is supplied.")
-    }
-  } else {
-    stop("data must have Value and/or Type column.")
-  }
-  
-  #years should be a list of years. It can be specified 2019:2022 for example
-    first_year <- min(years)
-    last_year <- max(years)
-  if(logratio){ #log ratio: use with migration type = "net", supply breaks as log of the positive ratios you want as breaks ex. c(log(1.1), log(1.3), log(1.5))
-    per = "" #anything else would be silly
-    unit = ":1"
-  }
-    
-    # caption_manual <- ifelse(!str_detect(caption_manual, "\n$") & caption_manual != "", str_c(caption_manual, "\n"), caption_manual) #make sure manual caption ends in \n
-
-    #this could be generalized a bit
-  if (source == "USDA") {
-    caption <- "Source: USDA Agriculture Census\n"
-  } else if (source == "IRS") {
-    if(is.na(years)[1]){
-      first_year = 2012 #default
-      last_year = 2022 #previously I was including the lower endpoint for IRS data but that's just semantics
-      years = 2012:2022
-      cat("Using default years for IRS data: 2012-2022\n")
-    }
-    if(last_year > 2021){
-       caption_manual = paste0(caption_manual, "Connecticut data is ",first_year,"-",2021,"\n")
-    }
-    caption <- paste0("Source: ",first_year, "-", last_year," IRS Migration Data\n")
-  } else if (source == "ACS") {
-    if(is.na(years)[1]){
-      first_year = 2011 #default
-      last_year = 2020
-      years = 2011:2020
-      cat("Using default years for ACS data: 2011-2020\n")
-    }
-    caption <- paste0("Source: ",first_year, "-", last_year," ACS Migration Data\n")
-  } else {
-    caption = ""
-  }
-  
-  caption <- paste0(caption, caption_manual)
-
-  
-  if (per == "capita" & length(years) > 1 | per == "year") {
-    num_years_ct = length(years[years < 2022]) #we don't have post-2021 data for CT due to the switch to planning regions, but I should write this better for post-2021 maps, but that is difficult without requiring that the data argument be un-aggregated by year
-    num_years_notct = length(years)
-    data <- data |>
-      mutate(
-        num_years = if_else(substr(fips, 1, 2) == "09" & level != "state", num_years_ct, num_years_notct),
-        #CT
-        Value = Value / num_years
-      )
-    subtitle <- if_else(is.na(subtitle) &
-                          per == "year", "Rate per year", subtitle)
-  }
-  if(is.na(scale_center) & "Value" %in% data_type){
-    if(min(data$Value, na.rm = T) < 0){
-      cat("Warning: negative Values in data\n")
-    }
-  }
-  
-  if (!is.na(region_fips)[1]) {
-      region = map |>
-        filter(fips %in% region_fips) |>
-        st_union()
-  } else{
-    region = NA
-  }
-  keep_cols = c("fips", data_type, cutoff_column, "geometry")
-  if(level %in% c("freefloating", "MSA")){
-    keep_cols = c(keep_cols, "name", "abbr")
-  }
-  data <- keep_columns(data, keep_cols)
-
-  if("Value" %in% data_type) {
-    data <- data |>
-      mutate(Value = Value * scale_factor) #for scaling (ex. scale_factor = 100000 for rate per 100000)
-  }
-  
-  if(level == "MSA"){ #this option is for if data are already merged by MSA, otherwise county_map is supplied for map and merge_MSAs is true
-    map = map |> #for MSA map we need to join by name because of non-metro counties
-      full_join(data, by = join_by(metro_name == name)) |>
-      rename(name = metro_name) #streamline this later
-  } else if(level == "freefloating"){
-    map = data #this should have Value and/or Type, geometry, name, abbr
-  } else {
-    map <- map |>
-      full_join(data, by = "fips")
-  } #Switched to full_join here to keep PR so that it can be in the inset at least. I don't think it will mess with the mapping.
-    if("Value" %in% data_type){
-    map <- map |>
-      mutate(cutoff = !!rlang::sym(cutoff_column))
-    }
-  if(merge_MSAs){
-    if("Type" %in% data_type){
-      stop("Categorical data can't be merged by MSA.")
-    } else if(level == "county"){ #merge_by_MSA merges a county_map by MSA
-      map = merge_by_MSA(map, region_fips)
-      level = "MSA"
-    } else if(level == "MSA"){
-      cat("Map merged by MSA already supplied, ignoring Merge_MSA argument.")
-    } else {
-      stop("ZIP/State/freefloating code map merge by MSA not implemented yet.")
-    }
-  }
-  
-  if (na_to_0 & "Value" %in% data_type) {
-    map <- map |>
-      mutate(Value = replace_na(Value, 0))
-  } 
-
-  dollar <- ""
-  if (str_detect(unit, "\\$")) {
-    dollar <- "$"
-    unit <- str_remove(unit, "\\$")
-  } else if (unit == "%") {
-    map <- map |>
-      mutate(Value = 100 * Value)
-  } else if (!str_detect(unit, "$[/:]")) {#ratios and rates don't have the space before
-    unit <- paste0(" ", unit)
-  }
-  
-    if(per %in% c("capita", "capita_total", "year")){ #use capita_total to divide by population over a period of time but not year (ex. for cumulative % population changes over multiple years)
-      if(is.na(years)[1]){
-        stop("Specify which years the data are for.")
-      }
-      pop_cols <- paste0("pop", substr(years, 3, 4))
-      map <- map %>%
-        rowwise() %>%
-        mutate(
-          avg_pop = mean(c_across(all_of(pop_cols)), na.rm = T), #at worst we're chopping off 2 years at the end so it isn't a big deal for now
-          avg_pop = ifelse(is.na(avg_pop) | avg_pop == 0, pop, avg_pop), # Default to "pop" if missing
-          pop = avg_pop #if pop is the inset cutoff this matters
-        ) %>%
-        ungroup()
-    }
-  if("Value" %in% data_type){
-  per_capita_result <- handle_per(map, source, per, subtitle, scale_factor)
-  map <- per_capita_result$map
-  subtitle <- per_capita_result$subtitle
-  } else {
-  inset_style = "hidden"
-}
-  if (inset_style == "hidden") {
-    inset_text <- ""
-  } else{ 
-    obs_units = case_when(obs_units != "auto" ~ obs_units,
-                      level == "county" ~ "Counties",
-                      level == "MSA" ~ "Counties/MSAs",
-                      level == "state" ~ "States",
-                      level == "ZIP" ~ "ZIP Codes",
-                      T ~ "")
-    if (inset_style %in% c("top", "bottom")) {
-    inset_text <- create_inset(map, level, inset_style, 10, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels, obs_units)
-  } else if (inset_style == "split") {
-    top <- create_inset(map, level, "top", 5, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels, obs_units)
-    bottom <- create_inset(map, level, "bottom", 5, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels, obs_units)
-    inset_text = paste0(top, "\n",bottom)
-    }
-  }
-  drop_cols = c("PR", "GU", "VI", "AS", "MP")
-  
-  #THIS WILL CRASH ZIP MAP UNTIL FIXED
-    if (continental) { #filter out AK and HI after inset
-      if("abbr" %in% colnames(map)) {
-        drop_cols = c(drop_cols, "AK", "HI")
-      } else{
-     map <- map |>
-      filter(!str_detect(name, ", HI$"),
-             !str_detect(name, ", AK$"),
-             !str_detect(name, ", PR$"),
-             !str_detect(name, ", VI$"),
-             !str_detect(name, ", GU$"),
-             !str_detect(name, ", AS$"),
-             !str_detect(name, ", MP$"))  
-      }
-  state_map <- state_map |>
-    filter(!abbr %in% c("AK", "HI"))
-  }
-  
-  if("abbr" %in% colnames(map)){
-    map <- map |>
-      filter(!abbr %in% drop_cols) 
-  } 
-  map <- map |>
-    filter(!st_is_empty(geometry))
-  
-  if (bubbles) {
-    if(is.na(max_bubble_size)){
-    max_bubble_size = auto_mbs(map)
-  }
-    plot <- bubble_map(map, state_map, level, max_bubble_size, palette, borders, dollar, unit, region, scale_center, plusminus_labels, data_type)
-  } else{
-    if(is.na(max_bubble_size) & level == "freefloating"){
-    max_bubble_size = min(2.5, max(1.5,10/log(nrow(map))))
-  }
-    choropleth <- choropleth_map(map, state_map, level, breaks, labels_manual, palette, borders, dollar, unit, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, increment)
-    plot = choropleth$plot
-    breaks = choropleth$breaks
-  }
-  
-  plot <- add_theme(plot, title, palette, subtitle, font_size, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag, level, inset_box, v_adj)
-  #Maps go in map folder, sub-folders named by source
-  graphicspath = paste0("Maps/", source, "/")
-  if(!dir.exists(graphicspath)){
-    #prompt user to create folder
-    createfolder = ""
-    while(!createfolder %in% c("Y", "N")){
-      createfolder = readline(prompt = paste0("Create folder '", source ,"'?[Y/N]\n"))
-      if(createfolder == "Y"){
-        dir.create(graphicspath, recursive = T) #recursive = T means that it will create the Maps folder too if it is missing
-      } else if(createfolder == "N"){
-        graphicspath = ""
-        cat("Outputting map to working directory.\n")
-      }
-    }
-  }
-  filepath = paste0(graphicspath, str_remove_all(title, "[ ']"), source, "_", level, ".jpg")
-  ggsave(filename = filepath, plot = plot, dpi = dpi, width = 10, height = 10) #set dpi to 100 for a cool retro look
-  system2("open", filepath)
-}
-```
-
-#helper functions
-```{r}
-keep_columns <- function(df, cols_to_keep) {
-  existing_cols <- intersect(cols_to_keep, colnames(df))
-  return(df[, existing_cols, drop = FALSE])
-}
-auto_mbs = function(map){
-  map <- map |>
-    mutate(abs_value = abs(Value))
-  max = max(map$abs_value, na.rm = T)
-  bubble <- map |>
-    select(abs_value) |>
-    mutate(normalized_bubble_size = abs_value / max,
-           normalized_bubble_size = replace_na(normalized_bubble_size, 0))
-  inflation_factor = 3000 / sum(bubble$normalized_bubble_size) #3000 was arrived at by trial and error, and doesn't work well for maps where the data is all clustered in one area
-  max_bubble_size = sqrt(max(bubble$normalized_bubble_size) * inflation_factor) #bubble size is in terms of radius not area
-  cat("Auto max bubble size: ", max_bubble_size, "\n")
-  return(max_bubble_size)
-}
-#computes midpoint color
-midpoint_rgb <- function(color1, color2, weight1) {
-  if(weight1 < 0 | weight1 > 1){
-    stop("weight1 is the weighting on the first color and must be between 0 and 1.\n")
-  }
-    col1 <- col2rgb(color1)
-    col2 <- col2rgb(color2)
-    mid_rgb <- weight1 * col1 + (1-weight1) * col2  # Biased the mix towards the mid_color so you can see the bubbles better
-    rgb(mid_rgb[1], mid_rgb[2], mid_rgb[3], maxColorValue = 255)
-}
-calculate_brightness <- function(color) {
-  rgb_values <- col2rgb(color) / 255  # Normalize RGB values to [0,1]
-  return(0.299 * rgb_values[1] + 0.587 * rgb_values[2] + 0.114 * rgb_values[3])  # Brightness formula
-}
-compute_bubble_breaks <- function(values) { # This is for finding good bubble sizes for the legend
-  max_value <- max(values, na.rm = TRUE)
-  min_value <- max(min(values , na.rm = TRUE),1)
-  
-  # Get the powers of 10 between min_value and max_value
-  powers_of_10 <- 10^(ceiling(log10(min_value)):floor(log10(max_value)))
-  
-  if (max_value > 5 * max(powers_of_10)) {
-    powers_of_10 <- c(powers_of_10, 5 * max(powers_of_10))
-  } else if(max_value > 2 * max(powers_of_10)){
-    powers_of_10 <- c(powers_of_10, 2 * max(powers_of_10))
-  }
-  
-  breaks <- sort(unique(powers_of_10))
-  if (length(breaks) > 4) {
-    breaks <- tail(breaks, 4) # No more than 4 bubbles in legend
-  }
-  return(breaks)
-}
-compute_breaks <- function(values, n_breaks){
-  values = sort(values)
-  top10 = values[1:10]
-  diffs = top10[1:9] - top10[2:10]
-  cut_values = values[1:(length(values) - which.max(diffs) + 1)]
-  max_value <- max(cut_values, na.rm = TRUE)
-  min_value <- max(min(cut_values , na.rm = TRUE), 0.000001)
-  powers_of_10 <- 10^(floor(log10(min_value)):floor(log10(max_value)))
-  potential_breaks = c(powers_of_10, 2*powers_of_10, 5*powers_of_10)
-  potential_breaks = potential_breaks[potential_breaks < max_value] #take out breaks above max value
-  potential_breaks = potential_breaks[potential_breaks > min_value] #take out breaks below min value
-  #maybe something where if only one observation is in the top break, then drop it
-  breaks <- sort(unique(potential_breaks))
-  breaks = tail(breaks, n_breaks-1)
-  breaks = c(round_to_sigfigs(min(values), 2, "floor"),
-                  breaks,
-                  round_to_sigfigs(max(values), 2,"ceiling"))
-  cat("Auto breaks: ", breaks, "\n")
-  return(breaks)
-}
-remove_empty_breaks <- function(map, breaks){ #this code tends to cause issues. should rewrite 
-  data <- map$Value
-  
-  # Always include the first break (minimum value)
-  adjusted_breaks <- c(breaks[1])
-  
-  # Iterate through the breaks starting from the second break
-  for (i in 2:(length(breaks) - 1)) {
-    # Check if there are any values between the previous break and the current break
-    if (any(data >= breaks[i - 1] & data < breaks[i], na.rm = TRUE)) {
-      # if there are, keep the current break
-      adjusted_breaks <- c(adjusted_breaks, breaks[i])
-    }
-  }
-  
-  # Always include the last break (maximum value)
-  adjusted_breaks <- c(adjusted_breaks, breaks[length(breaks)])
-  adjusted_breaks = unique(adjusted_breaks) #so that the last break doesn't end up in there twice
-  
-  return(adjusted_breaks)
-}
-# For nice-looking breakpoints for a cholorpleth legend (I usually hide endpoints now, but it's still good to have this functionality)
-round_to_sigfigs <- function(value, sigfigs, method = c("floor", "ceiling")) {
-  method <- match.arg(method)
-  if (value == 0) return(0)
-  
-  # Calculate the scale factor based on the significant figures
-  scale_factor <- 10^(floor(log10(abs(value))) - (sigfigs - 1))
-  
-  if (method == "floor") {
-    return(floor(value / scale_factor) * scale_factor)
-  } else if (method == "ceiling") {
-    return(ceiling(value / scale_factor) * scale_factor)
-  }
-}
-append_unit <- function(dollar, unit) {
-  function(x)
-    paste0(dollar, comma_format()(x), unit)
-}
-shorten <- function(value) {
-  sigfigs = 2
-  
-  if(is.na(value)){
-    return("")
-  } else if (abs(value) > 999999999) {
-    return(paste0(signif(value / 1000000000, sigfigs), "b")) #signif rounds to a given number of sigfigs
-  } else if (abs(value) > 999999) {
-    return(paste0(signif(value / 1000000, sigfigs), "m"))
-  } else if (abs(value) > 9999) {
-    return(paste0(signif(value / 1000, sigfigs), "k"))
-  } else if (abs(value) > 10) {
-    return(comma_format()(round(value, 0)))
-  } else{
-    return(as.character(signif(value, sigfigs)))
-  }
-}
-
-type_colors <- function(n_types){
-    # if(n_types <= 8) {
-    #   type_colors <- RColorBrewer::brewer.pal(n_types, "Dark2")
-    # } else {
-    #   type_colors <- viridis(n_types)
-    # }
-    if(n_types < 4) {
-      type_colors <- c( "#007f7f", "#0000ff", "#00ff00")[1:n_types]
-    } else {
-      type_colors <- viridis(n_types+1)[1:n_types] #so that the highest break isn't bright yellow
-    }
-  return(type_colors)
-}
-# c("#9bff00", "#9900ff", "#009b9b")
-```
-
-#set_palette
-```{r}
-#add different palette options later
-set_palette <- function(user_palette) {
-  default_palette <- list(
-    "high_color" = "red", #forestgreen
-    "mid_color" = "#e0df9b",  # #ECE4D5
-    "low_color" = "blue", #  #CC5500
-    "background_color" = "#E8DACC",# #f1e0cf
-    "title_color" = "#363c45",
-    "text_color" = "#363c45",
-    "highlight_color" = "steelblue",
-    "na_color" = "gray80"
-  )
-  return(modifyList(default_palette, user_palette))
 }
 ```
 
