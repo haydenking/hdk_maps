@@ -14,32 +14,39 @@ library(usmap)
 library(sf)
 ```
 
-#Read in pre-saved county_map or county_map_ag, MSAs and state_map
+#Read in pre-saved maps
 
 ```{r}
-  county_map_ag = st_read(paste0(wd, "county_map_ag/county_map_ag.shp"))
-  
+  # county_map = construct_county_map()
+  # st_write(county_map, "county_map/county_map.shp", delete_dsn = T)
   county_map = st_read(paste0(wd, "county_map/county_map.shp"))
-  
+
+  # county_map_ag = construct_county_map(ag_districts = T, maui_merge = T)
+  # st_write(county_map_ag, "county_map_ag/county_map_ag.shp", delete_dsn = T)
+  county_map_ag = st_read(paste0(wd, "county_map_ag/county_map_ag.shp"))
+
+  # county_map_planningregions = construct_county_map(planningregions = T)
+  # st_write(county_map_planningregions, "county_map_planningregions/county_map_planningregions.shp", delete_dsn = T)
   county_map_planningregions = st_read(paste0(wd, "county_map_planningregions/county_map_planningregions.shp"))
   
+  #Constructed in StateMap.qmd
   state_map = st_read(paste0(wd, "state_map/state_map.shp"))
   
+  #Constructed later in this file
   MSA_map = st_read(paste0(wd, "MSA_map/MSA_map.shp"))
 ```
 
 
 ```{r}
-#to do: test for planningregions = T, F
-
-construct_county_map <- function(planningregions = F, va_merge = F, ag_districts = F) {
+construct_county_map <- function(planningregions = F, va_merge = F, ag_districts = F, maui_merge = F) {
 
 county_map <- us_map("counties") |>
   rename(state = full,
          geometry = geom) |>
+  mutate(county = if_else(abbr == "DC", "Washington", county)) |>
   select(fips, county, abbr, state)
 
-if(planningregions){
+if(!planningregions){
   county_map <- county_map |>
     filter(!abbr == "CT") #remove ct
   ct_map = st_read(paste0(wd, "cb_2018_us_county_20m/cb_2018_us_county_20m.shp")) |>
@@ -114,7 +121,7 @@ county_map <- county_map |> #we don't really care about historical populations a
    select(fips, county, abbr, state, sqmi, pop)
 
 county_map_ak = county_map |>
-    filter(abbr == "AK" | county %in% c("Maui County", "Kalawao County")) |>
+    filter(abbr == "AK") |>
     mutate(county = str_remove(county, " Census Area"),
          county = str_remove(county, " and Borough"),
          county = str_remove(county, " Borough"),
@@ -124,16 +131,13 @@ county_map_ak = county_map |>
                                   county %in% c("Anchorage", "Matanuska-Susitna", "Chugach", "Copper River") ~ "Matanuska-Susitna-Anchorage",
                                   county %in% c("Juneau", "Ketchikan Gateway", "Sitka", "Yakutat", "Haines", "Prince of Wales-Hyder", "Skagway", "Wrangell", "Petersburg", "Hoonah-Angoon") ~ "Southeast",
                                   county %in% c("Aleutians East", "Aleutians West", "Lake and Peninsula", "Kodiak Island", "Bristol Bay", "Dillingham", "Bethel", "Nome", "Northwest Arctic", "North Slope", "Kusilvak") ~ "Southwest & West",
-                                  county %in% c("Fairbanks North Star", "Denali", "Southeast Fairbanks", "Yukon-Koyukuk") ~ "Tanana Valley",
-                                  county %in% c("Maui County", "Kalawao County") ~ "Maui County"
-                                  ))
+                                  county %in% c("Fairbanks North Star", "Denali", "Southeast Fairbanks", "Yukon-Koyukuk") ~ "Tanana Valley"))
 
 county_map_ak = county_map_ak |>
-  left_join(agdistricts_ak, by = "agdistrict") |>
-  mutate(main_county = if_else(is.na(main_county), agdistrict, main_county)) #just to fix the HI counties
+  left_join(agdistricts_ak, by = "agdistrict")
 
 county_map_ak <- county_map_ak |>
-  mutate(fips = case_when(county == main_county ~ fips,
+  mutate(fips = case_when(county == agdistrict ~ fips,
                           county == "Aleutians East" ~ "02010", #"Aleutian Islands" doesn't have a fips code but this is what USDA uses for this ag district
                           T ~ NA),
          county = paste0(agdistrict , " Ag District")) |>
@@ -142,20 +146,19 @@ county_map_ak <- county_map_ak |>
   group_by(fips, county) |> #grouping by fips and county is just so they don't get dropped
   summarize(geometry = st_union(geometry),
               sqmi = sum(sqmi),
-              pop = sum(pop)) |> #I kind of lazily tacked on the Maui-Kalawao merge to the Alaska Ag District thing
-  mutate(abbr = if_else(str_detect(county, "Maui"), "HI", "AK"),
-         state = if_else(str_detect(county, "Maui"), "Hawaii", "Alaska"),
-         county = if_else(str_detect(county, "Maui"), "Maui and Kalawao Counties", county))
+              pop = sum(pop)) |>
+  mutate(abbr = "AK",
+         state = "Alaska")
 
 county_map <- county_map |>
-  filter(abbr != "AK" & !(county %in% c("Maui County", "Kalawao County")))
+  filter(abbr != "AK")
 
 county_map = rbind(county_map, county_map_ak)
 
   }
 
 if(va_merge){ #This merge is used in Bureau of Economic Analysis data
-  #va_merges was constructed from a BEA dataset
+  #va_merges.csv was constructed from a BEA dataset
   # va_merges = industries_county |> 
   # filter(str_detect(GeoName, ", VA\\*"),
   #        GeoName != "Bedford, VA*") |> #it's just one county no need to merge
@@ -175,13 +178,15 @@ va_unmerged = county_map |>
          county = if_else(county %in% c("Fairfax City", "James City "), county, str_remove(county, "City")),
         county = str_trim(county)) |>
   st_drop_geometry()
-#there is an issue here with James City becoming James and two Fairfaxes but those won't negatively impact the final product
 
 va_key <- va_merges |>
+  filter(!is.na(fips)) |>
   unnest(components) |>
   rename(county = components) |>
   left_join(va_unmerged, by = "county") |>
-  select(fips, GeoFIPS)
+  select(fips, GeoFIPS) |>
+  filter(!is.na(fips),
+         fips != "51067") #Make sure Franklin County doesn't get merged into Franklin (city) + Southampton
 
 va_merged_geoms <- county_map |>
   filter(fips %in% va_key$fips) |>
@@ -203,8 +208,27 @@ va_merged_geoms <- county_map |>
   select(-GeoName)
 
 county_map = county_map |>
-  filter(!fips %in% va_merged_geoms$fips) |>
+  filter(!fips %in% va_key$fips) |>
   rbind(va_merged_geoms)
+}
+  
+if(maui_merge) {
+  maui = county_map |>
+  filter(county %in% c("Maui County", "Kalawao County")) |>
+  summarize(
+    across(contains("pop"), sum),
+    sqmi = sum(sqmi),
+    geometry = st_union(geometry)
+  ) |>
+  mutate(county = "Maui and Kalawao Counties",
+         fips = "15901",
+         abbr = "HI",
+         state = "Hawaii")
+
+county_map = county_map |>
+  filter(!county %in% c("Maui County", "Kalawao County")) |>
+  rbind(maui)
+  
 }
 
 coords <- st_coordinates(st_centroid(county_map))
@@ -229,6 +253,9 @@ MSAs = read_xls(paste0(wd,"MSAs.xls"))
 #https://www.census.gov/geographies/reference-files/time-series/demo/metro-micro/delineation-files.html
 #Version with CT planning regions
 #MSAs = read_xls(paste0(wd,"MSAs_planningregions.xls")) 
+```
+
+```{r}
 MSAs <- MSAs|>
   rename(st_FIPS = `FIPS State Code`,
          co_FIPS = `FIPS County Code`,
@@ -245,148 +272,7 @@ MSAs_crosswalk = MSAs |>
 # write.csv(MSAs_crosswalk, "MSAs_crosswalk.csv", row.names = F)
 ```
 
-#Code below is for creating the county_map shapefiles.
-
-##Create county_map
-```{r}
-county_map <- us_map("counties") |>
-  filter(!abbr == "CT") |> #remove ct
-  rename(state = full,
-         geometry = geom) |>
-  select(fips, county, abbr, state)
-
-ct_map = st_read(paste0(wd, "cb_2018_us_county_20m/cb_2018_us_county_20m.shp")) |>
-  filter(STATEFP == "09") #CT
-ct_map <- st_transform(ct_map, usmap_crs()) |>
-    mutate(abbr = "CT",
-           state = "Connecticut",
-           NAME = paste0(NAME, " County")) |>
-  rename(fips = GEOID, 
-         county = NAME) |>
-  select(fips, county, abbr, state)
-
-county_map = rbind(county_map, ct_map)
-  
-  #don't use the centroids from this because they take into account water area causing those around the Great Lakes to be off
-  areas = read.delim(paste0(wd,"2020_Gaz_counties_national.txt"), stringsAsFactors = FALSE) |> #older so that it has CT historical counties
-    filter(GEOID < 57000) |> #remove territories
-    rename(sqmi = ALAND_SQMI) |> #land area measured in square miles
-    mutate(fips = sprintf("%05d", GEOID)) |> #turn lat and long into coordinate pair
-    select(fips, sqmi)
-  county_map = left_join(county_map, areas, by = "fips") #I just get the areas from here
-  
-#using this source for 2020 pops because the census bureau official estimates use planning regions for CT
-  county_pops20 = read_delim(paste0(wd, "county_pop_centroids_2020.txt"), delim = ",") |>
-    mutate(fips = paste0(STATEFP, COUNTYFP)) |>
-    rename(pop = POPULATION) |>
-    select(fips, pop)
-  
-  county_map = left_join(county_map, county_pops20) 
-  
-#historical county pops from here: https://www.census.gov/data/datasets/time-series/demo/popest/2010s-counties-total.html
-  #2010-2019 pops
-county_pops1019 = read_xlsx(paste0(wd,"county_pops10-19.xlsx")) |>
-  mutate(county = str_remove(county, "^\\."),
-         county =str_split(county, ", ")) |>
-  unnest_wider(county, names_sep = "_") |>
-  rename(county = county_1,
-         state = county_2)
-
-county_map = left_join(county_map, county_pops1019, by = c("county", "state"))
-
-#2020-2023 pops from here: https://www.census.gov/data/tables/time-series/demo/popest/2020s-counties-total.html
-#these data use CT planning regions
-  #maybe read this directly from the internet for easy updating?
-county_pops_recent = read_xlsx(paste0(wd,"county_pops20-23.xlsx")) |>
-  mutate(county = str_remove(county, "^\\."),
-         county =str_split(county, ", ")) |>
-  unnest_wider(county, names_sep = "_") |>
-  rename(county = county_1,
-         state = county_2)
-
-county_map = left_join(county_map, county_pops_recent, by = c("county", "state"))
-
-  county_map <- county_map |>
-      mutate(county = str_replace(county, "city", "City"), #for independent cities
-             pop20 = if_else(is.na(pop20), pop, pop20) #pop is pop20, but this fixes it for CT counties
-             )
-```
-
-##Only run this section for Ag CountyMap (USDA data) because this creates Ag Districts for Alaska and Merges Maui and Kalawao Counties in HI
-```{r}
-datapath_farm = paste0(wd, "Data/Farm/")
-agdistricts_ak = read.csv(paste0(datapath_farm, "agdistricts_ak.csv")) |>
-  select(-X, -fips)
-
-county_map <- county_map |> #we don't really care about historical populations as much
-   select(fips, county, abbr, state, sqmi, pop)
-
-county_map_ak = county_map |>
-    filter(abbr == "AK" | county %in% c("Maui County", "Kalawao County")) |>
-    mutate(county = str_remove(county, " Census Area"),
-         county = str_remove(county, " and Borough"),
-         county = str_remove(county, " Borough"),
-         county = str_remove(county, " Municipality"),
-         county = str_remove(county, " City"),
-         agdistrict = case_when(county %in% c("Kenai Peninsula") ~ "Kenai Peninsula",
-                                  county %in% c("Anchorage", "Matanuska-Susitna", "Chugach", "Copper River") ~ "Matanuska-Susitna-Anchorage",
-                                  county %in% c("Juneau", "Ketchikan Gateway", "Sitka", "Yakutat", "Haines", "Prince of Wales-Hyder", "Skagway", "Wrangell", "Petersburg", "Hoonah-Angoon") ~ "Southeast",
-                                  county %in% c("Aleutians East", "Aleutians West", "Lake and Peninsula", "Kodiak Island", "Bristol Bay", "Dillingham", "Bethel", "Nome", "Northwest Arctic", "North Slope", "Kusilvak") ~ "Southwest & West",
-                                  county %in% c("Fairbanks North Star", "Denali", "Southeast Fairbanks", "Yukon-Koyukuk") ~ "Tanana Valley",
-                                  county %in% c("Maui County", "Kalawao County") ~ "Maui County"
-                                  ))
-
-county_map_ak = county_map_ak |>
-  left_join(agdistricts_ak, by = "agdistrict") |>
-  mutate(main_county = if_else(is.na(main_county), agdistrict, main_county)) #just to fix the HI counties
-
-county_map_ak <- county_map_ak |>
-  mutate(fips = case_when(county == main_county ~ fips,
-                          county == "Aleutians East" ~ "02010", #"Aleutian Islands" doesn't have a fips code but this is what USDA uses for this ag district
-                          T ~ NA),
-         county = paste0(agdistrict , " Ag District")) |>
-  group_by(agdistrict) |>
-  mutate(fips = na.omit(fips)) |>
-  group_by(fips, county) |> #grouping by fips and county is just so they don't get dropped
-  summarize(geometry = st_union(geometry),
-              sqmi = sum(sqmi),
-              pop = sum(pop)) |> #I kind of lazily tacked on the Maui-Kalawao merge to the Alaska Ag District thing
-  mutate(abbr = if_else(str_detect(county, "Maui"), "HI", "AK"),
-         state = if_else(str_detect(county, "Maui"), "Hawaii", "Alaska"),
-         county = if_else(str_detect(county, "Maui"), "Maui and Kalawao Counties", county))
-
-county_map <- county_map |>
-  filter(abbr != "AK" & !(county %in% c("Maui County", "Kalawao County")))
-
-county_map = rbind(county_map, county_map_ak)
-```
-
-# Add Centroids
-```{r}
-coords <- st_coordinates(st_centroid(county_map))
-county_map <- county_map |>
-  mutate(x = coords[, 1],
-         y = coords[, 2],
-         x = if_else(county == "Kenai Peninsula Ag District", x+40000, x), #fix Alaska centroids
-         y = if_else(county == "Southwest & West Ag District", y-210000, y),
-         x = if_else(county == "Southeast Ag District", x - 50000, x),
-         y = if_else(county == "Southeast Ag District", y +50000, y),
-         name = paste0(county, ", ", abbr))
-```
-
-```{r}
-#For saving normal county_map (CT historical counties)
-#st_write(county_map, "county_map/county_map.shp", delete_dsn = TRUE)
-
-#For saving county_map_ag (usda data)
-#st_write(county_map, "county_map_ag/county_map_ag.shp", delete_dsn = TRUE)
-
-#for saving county_map_va_merged (Bureau of Economic Analysis data)
-
-```
-
 #This creates the MSA_map shapefile from county_map (MSAs uses CT historical counties, need to download a more recent version for it to work with planning regions)
-
 ```{r}
 MSA_map = county_map |>
   left_join(MSAs, by = "fips") |>

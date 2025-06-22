@@ -1,0 +1,249 @@
+---
+title: "BEAMapping"
+format: pdf
+editor: source
+---
+
+```{r}
+#https://www.bea.gov/data/gdp/gdp-county-metro-and-other-areas
+wd = "/Users/Hayden/Maps/"
+datapath_bea = paste0(wd, "Data/BEA/")
+
+#use construct_county_map function from CountyMap.qmd
+county_map_bea = construct_county_map(va_merge = T, maui_merge = T) |>
+  mutate(fips = if_else(county == "Maui and Kalawao Counties", "15901", fips))
+```
+
+```{r}
+industries = read.csv(paste0(datapath_bea,"CAGDP2__ALL_AREAS_2001_2023.csv")) |>
+  mutate(fips = str_trim(GeoFIPS),
+         Description = str_trim(Description),
+         Description = str_remove(Description, "[0-9]/$"),
+         GDP = as.numeric(X2023)*1000,
+         totalGDP = if_else(Description == "All industry total", GDP, 0))|> #now it's measured in millions to prevent overflow
+  filter(!is.na(GDP)) |>
+  group_by(fips) |>
+  mutate(totalGDP = sum(totalGDP)) |>
+  filter(Description != "All industry total") |>
+  mutate(portion = GDP / totalGDP) |>
+  ungroup() |>
+  select(fips, Description, GeoName, GDP, totalGDP, portion)
+
+us_total <- industries |>
+  filter(fips == "00000")
+industries_county <- industries |>
+  filter(str_sub(fips, start = 3, end = 5) != "000",
+         fips != "00000")
+industries_states <- industries |>
+  filter(str_sub(fips, start = 3, end = 5) == "000",
+         fips != "00000") |>
+  mutate(fips = str_sub(fips, end = 2))
+```
+
+
+```{r}
+#for many industries state level is better
+#unique(us_total$Description)
+industry = "Nondurable goods manufacturing"
+display_name = "Nondurable Goods Manufacturing"
+
+  industry_total = us_total |> 
+    filter(Description == industry)
+  
+map(
+  data = industries_county |>
+    filter(Description == industry) |>
+    rename(Value = portion),
+  map = county_map_bea,
+  state_map = state_map,
+  bubbles = F,
+  title = paste0(display_name, " as a Percent of County GDP"),
+  subtitle = paste0("National Average: ", signif(100*industry_total$portion, 2), "%"),
+  source = "BEA",
+  years = 2023,
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  unit = "%",
+  # inset_cutoff = 10000,
+  # cutoff_column = "pop",
+  breaks = c(2, 5, 10, 20),
+  palette = list(high_color = "darkgreen")
+)
+
+map(
+  data = industries_county |>
+    filter(Description == industry) |>
+    mutate(Value = GDP),
+  map = county_map_bea,
+  state_map = state_map,
+  bubbles = T,
+  title = paste0(display_name, " Industry by County"),
+  subtitle = paste0("US Total: $", shorten(industry_total$GDP)),
+  source = "BEA",
+  years = 2023,
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  unit = "$",
+  palette = list(high_color = "darkgreen")
+)
+
+map(
+  data = industries_states |>
+    filter(Description == industry) |>
+    rename(Value = portion),
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = paste0(display_name, " as a Percent of State GDP"),
+  subtitle = paste0("National Average: ", signif(100*industry_total$portion, 2), "%"),
+  source = "BEA",
+  years = 2023,
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  unit = "%",
+  breaks = c(3,5,7),
+  palette = list(high_color = "darkgreen")
+)
+
+map(
+  data = industries_states |>
+    filter(Description == industry) |>
+    mutate(Value = GDP),
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = paste0(display_name, " Industry by State"),
+  subtitle = paste0("US Total: $", shorten(industry_total$GDP)),
+  source = "BEA",
+  years = 2023,
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  unit = "$",
+  palette = list(high_color = "darkgreen")
+)
+
+#per capita numbers don't seem to make much sense, probably need to look at payroll instead of comparing to resident population
+# map(
+#   data = industries_county |>
+#     filter(Description == industry) |>
+#     rename(Value = GDP),
+#   map = county_map_bea,
+#   state_map = state_map,
+#   bubbles = F,
+#   title = paste0(display_name, " GDP Per Capita"),
+#   subtitle = paste0("National Average: $", shorten(industry_total$GDP / sum(county_map$pop))),
+#   source = "BEA",
+#   caption_manual = "Year: 2023\nSource: US Bureau of Economic Analysis",
+#   year = 2023,
+#   unit = "$",
+#   per = "capita",
+#   inset_cutoff = 10000,
+#   cutoff_column = "pop",
+#   palette = list(high_color = "darkgreen")
+# )
+
+# map(
+#   data = industries_states |>
+#     filter(Description == industry) |>
+#     mutate(Value = GDP),
+#   map = state_map,
+#   state_map = state_map,
+#   bubbles = F,
+#   title = paste0(display_name, " GDP Per Capita"),
+#   subtitle = paste0("National Average: $", shorten(industry_total$GDP/ sum(county_map$pop))),
+#   source = "BEA",
+#   years = 2023,
+#   caption_manual = "Source: US Bureau of Economic Analysis",
+#   unit = "$",
+#   per = "capita",
+#   breaks = c(3000, 6000, 9000),
+#   increment = 1,
+#   palette = list(high_color = "darkblue")
+# )
+```
+
+
+#total GDP
+```{r}
+industry_total = us_total |>
+  select(fips, totalGDP) |>
+  rename(GDP = totalGDP) |>
+  distinct()
+
+map(
+  data = industries_county |>
+    select(fips, totalGDP) |>
+    rename(Value = totalGDP) |>
+    distinct(),
+  map = county_map_bea,
+  state_map = state_map,
+  bubbles = F,
+  title = "GDP Per Capita",
+  subtitle = paste0("National Average: $", shorten(industry_total$GDP / sum(county_map$pop))),
+  source = "BEA",
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  year = 2023,
+  unit = "$",
+  per = "capita",
+  inset_cutoff = 50000,
+  inset_style = "split",
+  breaks = c(40000, 50000, 70000, 100000, 140000),
+  cutoff_column = "pop",
+  palette = list(high_color = "darkgreen")
+)
+
+map(
+  data = industries_county |>
+    select(fips, totalGDP) |>
+    rename(Value = totalGDP) |>
+    distinct(),
+  map = county_map_bea,
+  state_map = state_map,
+  bubbles = T,
+  title = "GDP by County",
+  subtitle = paste0("US Total: $", shorten(industry_total$GDP)),
+  source = "BEA",
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  year = 2023,
+  unit = "$",
+  palette = list(high_color = "darkgreen",
+                 mid_color = "lightgreen")
+)
+
+map(
+  data = industries_states |>
+    select(fips, totalGDP) |>
+    rename(Value = totalGDP) |>
+    distinct(),
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = "GDP by State",
+  subtitle = paste0("US Total: $", shorten(industry_total$GDP)),
+  source = "BEA",
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  year = 2023,
+  unit = "$",
+  palette = list(high_color = "darkgreen",
+                 mid_color = "lightgreen")
+)
+
+map(
+  data = industries_states |>
+    select(fips, totalGDP) |>
+    rename(Value = totalGDP) |>
+    distinct(),
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = "GDP Per Capita",
+  subtitle = paste0("National Average: $", shorten(industry_total$GDP/ sum(county_map$pop))),
+  source = "BEA",
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  year = 2023,
+  unit = "$",
+  per = "capita",
+  inset_style = "split",
+  year = 2023,
+  breaks = c(65000, 75000, 85000, 95000),
+  palette = list(high_color = "darkgreen",
+                 mid_color = "lightgreen")
+)
+```
+
