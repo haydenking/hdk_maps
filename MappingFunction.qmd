@@ -297,7 +297,7 @@ if("fips" %in% colnames(data)){
 
 #helper functions
 ```{r}
-keep_columns <- function(df, cols_to_keep) {
+keep_columns <- function(df, cols_to_keep) { #because select() doesn't work if you give it columns that aren't in the data
   existing_cols <- intersect(cols_to_keep, colnames(df))
   return(df[, existing_cols, drop = FALSE])
 }
@@ -332,7 +332,6 @@ compute_bubble_breaks <- function(values) { # This is for finding good bubble si
   max_value <- max(values, na.rm = TRUE)
   min_value <- max(min(values , na.rm = TRUE),1)
   
-  # Get the powers of 10 between min_value and max_value
   powers_of_10 <- 10^(ceiling(log10(min_value)):floor(log10(max_value)))
   
   if (max_value > 5 * max(powers_of_10)) {
@@ -410,13 +409,13 @@ round_to_sigfigs <- function(value, sigfigs, method = c("floor", "ceiling")) {
     return(ceiling(value / scale_factor) * scale_factor)
   }
 }
+
 append_unit <- function(dollar, unit) {
   function(x)
     paste0(dollar, comma_format()(x), unit)
 }
 
 #I don't like the way this one handles values between 1 and 10, leaving an extra .0 on there when it's a whole number
-
 # shorten <- function(x) {
 #   label_number(
 #     scale_cut = cut_short_scale(),
@@ -450,11 +449,6 @@ shorten <- function(value) {
 }
 
 type_colors <- function(n_types){
-    # if(n_types <= 8) {
-    #   type_colors <- RColorBrewer::brewer.pal(n_types, "Dark2")
-    # } else {
-    #   type_colors <- viridis(n_types)
-    # }
     if(n_types < 4) {
       type_colors <- c( "#007f7f", "#0000ff", "#00ff00")[1:n_types]
     } else {
@@ -462,12 +456,10 @@ type_colors <- function(n_types){
     }
   return(type_colors)
 }
-# c("#9bff00", "#9900ff", "#009b9b")
 ```
 
 #set_palette
 ```{r}
-#add different palette options later
 set_palette <- function(user_palette) {
   default_palette <- list(
     "high_color" = "red", #forestgreen
@@ -490,18 +482,18 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
   style <- match.arg(style)
   
   if(style == "top" & min(map$Value, na.rm = T) < 0){
-    dollar = paste0("+",dollar)
+    dollar = paste0("+",dollar) #dollar is just whatever does before the number
+    #this assumes that the top are all positive
   }
-  
-  if(level == "county"){
-    map <- map |> #need to double check if this actually does anything
-      mutate(name = case_when(fips == "57001" ~ "Overseas",
-                            fips == "57003" ~ "Puerto Rico",
-                            fips == "57005" ~ "Military Deployment",
-                            fips == "57007" ~ "U.S. Virgin Islands",
-                            T ~ name
-                            ))
-  }
+  # if(level == "county"){
+  #   map <- map |>
+  #     mutate(name = case_when(fips == "57001" ~ "Overseas",
+  #                           fips == "57003" ~ "Puerto Rico",
+  #                           fips == "57005" ~ "Military Deployment",
+  #                           fips == "57007" ~ "U.S. Virgin Islands",
+  #                           T ~ name
+  #                           ))
+  # }
   inset_data <- map |>
     st_drop_geometry() |>
         filter(cutoff >= inset_cutoff,
@@ -512,7 +504,6 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
     inset_data <- inset_data |>
       mutate(Value = exp(Value))
   }
-  
   if (style == "top") {
     inset_data <- inset_data |>
       arrange(desc(Value))
@@ -520,7 +511,6 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
     inset_data <- inset_data |>
       arrange(Value)
   }
-
  inset_data <- inset_data |>
     mutate(
       rank_value = min_rank(if (style == "top") desc(Value) else Value),
@@ -537,7 +527,7 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
   if(nrow(inset_data) > n){
     message("Expanding inset to ", n, " observations due to ties.\n")
   }
-  n = nrow(inset_data) #in case there are less than 10 observations (needed for some state maps) or ties in inset
+  n = nrow(inset_data)
   
   if(hide_values){
     inset_data <- inset_data |>
@@ -553,10 +543,8 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
     #          Value = if_else(invert, 1/Value, Value),
     #     label = paste0(rank, name, ": ", dollar, if_else(invert, "1:",""),sapply(Value, shorten),if_else(invert,"", ":1"), unit))
 
-if(obs_units == "") cat("Warning: obs_units in inset is blank.\n")
-
   topbottom = if_else(style == "top", inset_labels$top, inset_labels$bottom)
-    #using /n/ to insert n
+    #use /n/ to insert n
   topbottom = str_replace(topbottom, "/n/",as.character(n)) #Turn "Top /n/" into "Top 10" or "Bottom /n/" into "Bottom 5"
   if(obs_units != ""){
     topbottom = if_else(str_detect(topbottom, " $"), topbottom , paste0(topbottom, " ")) # Make sure top/bottom ends in a space
@@ -657,29 +645,6 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
       hjust = 0,
       vjust = 0
     ))
-      # plot = plot +
-    # annotation_custom(
-    # grob = grobTree(gList(
-    #   roundrectGrob(
-    #     x =  x_pos - unit(0.01, "npc"),
-    #     y = y_pos + v_adj - unit(0.01, "npc"),
-    #     width = text_width + unit(0.02, "npc"),
-    #     height = text_height + unit(0.02, "npc"),
-    #     r = unit(0.03, "npc"), #0.1 is the most you can do without the corners bumping into the text but 0.03 looks better
-    #     just = c("left", "bottom"),
-    #     gp = gpar(fill = midpoint_rgb(palette$mid_color, palette$high_color, 0.7), col = palette$text_color, lwd = 2)
-    #   ),
-    # textGrob(
-    #   inset_text,
-    #   x = x_pos,
-    #   y = y_pos + v_adj,
-    #   just = c("left", "bottom"),
-    #   gp = gpar(
-    #     fontsize = inset_font_size,
-    #     fontface = "bold",
-    #     col = palette$text_color,
-    #     fontfamily = font)
-    #   ))))
   if(inset_box & inset_text != "") {
         plot = plot +
     annotation_custom(
@@ -1072,7 +1037,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
 #add_state_labels
 ```{r}
 add_state_labels <- function(plot, map, palette, dollar, unit){
-      #yes this is a mess but it works for now (mostly)
+      #yes this is a mess but it works
 
     adjustments <- tibble::tibble( #these adjustments are needed for labels but aren't good bubble locations
   abbr = c("NH", "MA", "CT", "NJ","MD", "RI", "DE", "IN", "VT"), # Indiana adjustment is just so it doesn't overlap with Illinois for long labels
@@ -1160,14 +1125,11 @@ merge_by_MSA <- function(county_map, region_fips){
       ungroup() |>
         mutate(Value = if_else(Value == 0, NA, Value))
 
-    
-map$centroid = st_centroid(map$geometry)
+coords <- st_coordinates(st_centroid(map))
 map <- map |>
-  mutate(centroid = st_centroid(geometry),
-         x = st_coordinates(centroid)[, 1],
-         y = st_coordinates(centroid)[, 2],
-         name = metro_name) |>
-  select(-centroid)
+  mutate(x = coords[, 1],
+         y = coords[, 2],
+         name = metro_name)
 
 return(map)
 }
