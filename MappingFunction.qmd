@@ -14,6 +14,11 @@ library(ggrepel)
 library(grid)
 library(colorspace)
 library(viridis)
+library(showtext)
+library(sysfonts)
+
+font_add_google(name = "Lekton", family = "lekton")
+showtext_auto()
 #TO DO:
 #map with per capita shading and bubbles for absolute count
 #aggregate county data by state and then use state map options > merge_by_state
@@ -31,15 +36,9 @@ library(viridis)
 ###map
 ```{r}
 #put error handling in separate function?
-#global sigfig parameter
-#good documentation
-map <- function(data, map, state_map = NULL, title, source, font_size = NA, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, palette = list(), inset_cutoff = -1000000000, cutoff_column = "Value", breaks = NA, na_to_0 = F, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T, v_adj = 0, increment = 0) {
-  
+#make good documentation
+map <- function(data, map, state_map = NULL, title, source, font_size = NA, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, palette = list(), inset_cutoff = -Inf, cutoff_column = "Value", breaks = NA, na_to_0 = F, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T, v_adj = 0, increment = 0) {
   palette = set_palette(palette)
-  
-  if(nrow(data) == 0){
-    stop("Data has 0 rows")
-  }
   
 if("fips" %in% colnames(data)){
   if (all(nchar(data$fips) == 2)) { #2 digit fips codes for states
@@ -161,9 +160,16 @@ if("fips" %in% colnames(data)){
     map <- map |>
       full_join(data, by = "fips")
   } #Switched to full_join here to keep PR so that it can be in the inset at least. I don't think it will mess with the mapping.
+  
+  for(col in data_type){
+    if(all(is.na(map[[col]]))){
+      stop(paste0(col, "  is all NAs. Likely wrong map supplied. \n"))
+    }
+  }
+  
     if("Value" %in% data_type){
     map <- map |>
-      mutate(cutoff = !!rlang::sym(cutoff_column))
+      mutate(cutoff = !!sym(cutoff_column))
     }
   if(merge_MSAs){
     if("Type" %in% data_type){
@@ -214,7 +220,12 @@ if("fips" %in% colnames(data)){
   subtitle <- per_capita_result$subtitle
   } else {
   inset_style = "hidden"
-}
+  }
+  
+  #vectorized string formatter
+  format_value <- append_unit(dollar, unit)
+  format_value_no_unit <- append_unit(dollar, "")
+  
   if (inset_style == "hidden") {
     inset_text <- ""
   } else{ 
@@ -225,10 +236,10 @@ if("fips" %in% colnames(data)){
                       level == "ZIP" ~ "ZIP Codes",
                       T ~ "")
     if (inset_style %in% c("top", "bottom")) {
-    inset_text <- create_inset(map, level, inset_style, 10, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels, obs_units)
+    inset_text <- create_inset(map, level, inset_style, 10, inset_cutoff, cutoff_column, logratio, scale_center, hide_values, inset_labels, obs_units, format_value)
   } else if (inset_style == "split") {
-    top <- create_inset(map, level, "top", 5, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels, obs_units)
-    bottom <- create_inset(map, level, "bottom", 5, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels, obs_units)
+    top <- create_inset(map, level, "top", 5, inset_cutoff, cutoff_column, logratio, scale_center, hide_values, inset_labels, obs_units, format_value)
+    bottom <- create_inset(map, level, "bottom", 5, inset_cutoff, cutoff_column, logratio, scale_center, hide_values, inset_labels, obs_units, format_value)
     inset_text = paste0(top, "\n",bottom)
     }
   }
@@ -263,12 +274,12 @@ if("fips" %in% colnames(data)){
     if(is.na(max_bubble_size)){
     max_bubble_size = auto_mbs(map)
   }
-    plot <- bubble_map(map, state_map, level, max_bubble_size, palette, borders, dollar, unit, region, scale_center, plusminus_labels, data_type)
+    plot <- bubble_map(map, state_map, level, max_bubble_size, palette, borders, region, scale_center, plusminus_labels, data_type, format_value)
   } else{
     if(is.na(max_bubble_size) & level == "freefloating"){
     max_bubble_size = min(2.5, max(1.5,10/log(nrow(map))))
   }
-    choropleth <- choropleth_map(map, state_map, level, breaks, labels_manual, palette, borders, dollar, unit, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, increment)
+    choropleth <- choropleth_map(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, increment, dollar, unit, format_value, format_value_no_unit)
     plot = choropleth$plot
     breaks = choropleth$breaks
   }
@@ -289,7 +300,9 @@ if("fips" %in% colnames(data)){
       }
     }
   }
-  filepath = paste0(graphicspath, str_remove_all(title, "[ ']"), source, "_", level, ".jpg")
+  
+  filepath = paste0(graphicspath, str_remove_all(title, "[ '()]"), source, "_", level, ".jpg")
+  showtext_opts(dpi = dpi)
   ggsave(filename = filepath, plot = plot, dpi = dpi, width = 10, height = 10) #set dpi to 100 for a cool retro look
   system2("open", filepath)
 }
@@ -411,41 +424,36 @@ round_to_sigfigs <- function(value, sigfigs, method = c("floor", "ceiling")) {
 }
 
 append_unit <- function(dollar, unit) {
-  function(x)
-    paste0(dollar, comma_format()(x), unit)
+  function(x) {
+    sign <- ifelse(x < 0, "-", "")
+    paste0(sign, dollar, shorten(abs(x)), unit)
+  }
 }
 
-#I don't like the way this one handles values between 1 and 10, leaving an extra .0 on there when it's a whole number
-# shorten <- function(x) {
-#   label_number(
-#     scale_cut = cut_short_scale(),
-#     accuracy = case_when(abs(x) >= 10 ~ 1,
-#                          abs(x) >= 1 ~ 0.1,
-#                          T ~ 0.01)
-#   )(x)
-# }
-
+#vectorized it
 shorten <- function(value) {
-  if (is.na(value)) return("")
+  sapply(value, function(v) {
+    if (is.na(v)) return("")
 
-  abs_val <- abs(value)
+    abs_val <- abs(v)
 
     if (abs_val >= 1000 && abs_val < 10000) {
-    return(comma_format()(round(value)))
-  }
-
-  # Thresholds and suffixes
-  thresholds <- c(1e12, 1e9, 1e6, 1e3)
-  suffixes   <- c("t",   "b",  "m",  "k")
-
-  for (i in seq_along(thresholds)) {
-    if (abs_val >= thresholds[i]) {
-      display_value = value / thresholds[i]
-      if(display_value >= 100) sigfigs = 3 else sigfigs = 2
-      return(paste0(signif(display_value, sigfigs), suffixes[i]))
+      return(comma_format()(round(v)))
     }
-  }
-    return(as.character(signif(value, 2)))
+
+    thresholds <- c(1e12, 1e9, 1e6, 1e3, 1)
+    suffixes   <- c("t",   "b",  "m",  "k", "")
+
+    for (i in seq_along(thresholds)) {
+      if (abs_val >= thresholds[i]) {
+        display_value <- v / thresholds[i]
+        sigfigs <- if (display_value >= 100) 3 else 2
+        return(paste0(signif(display_value, sigfigs), suffixes[i]))
+      }
+    }
+
+    return(as.character(signif(v, 2)))
+  })
 }
 
 type_colors <- function(n_types){
@@ -477,14 +485,10 @@ set_palette <- function(user_palette) {
 
 #create_inset
 ```{r}
-create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff, cutoff_column, dollar, unit, logratio, scale_center, hide_values, inset_labels, obs_units) {
+create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff, cutoff_column, logratio, scale_center, hide_values, inset_labels, obs_units, format_value) {
   
   style <- match.arg(style)
   
-  if(style == "top" & min(map$Value, na.rm = T) < 0){
-    dollar = paste0("+",dollar) #dollar is just whatever does before the number
-    #this assumes that the top are all positive
-  }
   # if(level == "county"){
   #   map <- map |>
   #     mutate(name = case_when(fips == "57001" ~ "Overseas",
@@ -529,19 +533,21 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
   }
   n = nrow(inset_data)
   
-  if(hide_values){
-    inset_data <- inset_data |>
-      mutate(label = paste0(rank, name))
-  } else{
-    inset_data <- inset_data |>
-      mutate(label = paste0(rank, name,": ", dollar, sapply(Value, shorten), unit))
-  }
-
-    #took out invert functionality because people don't like it
-    # inset_data <- inset_data |>
-    #   mutate(invert = (Value < 1),
-    #          Value = if_else(invert, 1/Value, Value),
-    #     label = paste0(rank, name, ": ", dollar, if_else(invert, "1:",""),sapply(Value, shorten),if_else(invert,"", ":1"), unit))
+inset_data <- inset_data |>
+  mutate(
+    plus = case_when(is.na(scale_center) ~ "",
+                     scale_center == 0 & Value > 0 ~ "+",
+                     T ~ ""),
+    label = if (hide_values) {
+      paste0(rank, name)
+    } else {
+      paste0(
+        rank, name, ": ",
+        plus,
+        format_value(Value)
+      )
+    }
+  )
 
   topbottom = if_else(style == "top", inset_labels$top, inset_labels$bottom)
     #use /n/ to insert n
@@ -563,6 +569,7 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
 ```{r}
 #legend takes up too much space when it has to do color and size, covers up caption
 #having issues with high max_bubble_size (> ~30), but that may be unavoidable due to space constraints
+
 add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag, level, inset_box, v_adj) {
   
   font = "Arial"
@@ -601,7 +608,8 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
     theme(
       legend.title = element_blank(),
       legend.text = element_text(size = 14, color = palette$text_color, face = "bold"), #if_else(bubbles, 14, 12)
-      #legend.position = "bottom",
+      # legend.position = "bottom",
+      # legend.position.inside = c(left_margin, -0.02), #need to change from legend.position due to deprecation
       legend.position = c(left_margin, -0.02),
       legend.justification = "left",
       legend.direction = "horizontal",
@@ -632,7 +640,7 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
     )) +
     annotation_custom(grid::textGrob(
       if_else(tag, "@hdk_maps", ""),
-      gp = grid::gpar(fontsize = 12, col = palette$title_color, fontface = "bold", fontfamily = font),
+      gp = grid::gpar(fontsize = 12, col = palette$title_color, fontface = "bold", fontfamily = "lekton"),
       x = unit(title_alignment, "npc"),
       y = unit(title_height - subtitle_offset - if_else(is.na(subtitle), 0, subtitle_offset/2), "npc"), #0.034
       hjust = 0.5
@@ -686,7 +694,7 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
   #didn't try very hard to make it work but it seems this kinda might not work if I put it in choropleth_map idk why
   if (!bubbles & level != "freefloating") {
     plot <- plot +
-      theme(legend.key = element_rect(fill = NA, color = "black", size = 0.5))
+      theme(legend.key = element_rect(fill = NA, color = "black",  linewidth = 0.5))#changed from linewidth to size due to deprecation
   }
   
   return(plot)
@@ -708,7 +716,7 @@ handle_per <- function(map, source, per, subtitle, scale_factor) {
       mutate(Value = Value / (sqmi * 640))
   } else if (per != "" & per != "year") {
     map <- map |>
-      mutate(Value = Value / !!rlang::sym(per)) #this should handle sqmi
+      mutate(Value = Value / !!sym(per)) #this should handle sqmi
   }
   
   return(list(map = map, subtitle = subtitle))
@@ -717,7 +725,7 @@ handle_per <- function(map, source, per, subtitle, scale_factor) {
 
 #bubble_map
 ```{r}
-bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders, dollar, unit, region, scale_center, plusminus_labels, data_type) {
+bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders, region, scale_center, plusminus_labels, data_type, format_value) {
   
   low_fill_color <- midpoint_rgb(palette$mid_color, palette$low_color, 0.8)
   high_fill_color <- midpoint_rgb(palette$mid_color, palette$high_color, 0.8)
@@ -776,8 +784,7 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
   }
     
   breaks = compute_bubble_breaks(map$abs_value)
-  break_labels = map_chr(breaks, ~shorten(.x))
-  break_labels = paste0(dollar, break_labels, unit)
+  break_labels = format_value(breaks)
     
   plot <- plot +
     scale_size_continuous(
@@ -848,7 +855,7 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
 
 #choropleth_map
 ```{r}
-choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, dollar, unit, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, increment) {
+choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, increment, dollar, unit, format_value, format_value_no_unit) {
   
   if ("Type" %in% data_type) {
     map <- map %>% mutate(Type = as.factor(Type))
@@ -927,16 +934,16 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
   lower_breaks <- head(breaks, -1)
   upper_breaks <- breaks[-1]
   if (!show_endpoints) {
-    first_label <- paste0(if_else(increment == 0, "<", "≤"), dollar, shorten(upper_breaks[1]), unit)
-    middle_labels <- paste0(dollar, sapply(lower_breaks[-1] + increment, shorten), " to ", 
-                             dollar, sapply(upper_breaks[-1], shorten), unit)
+    first_label <- paste0(if_else(increment == 0, "<", "≤"), format_value(upper_breaks[1]))
+    middle_labels <- paste0(format_value_no_unit(lower_breaks[-1] + increment), " to ", 
+                             format_value(upper_breaks[-1]))
       formatted_labels <- c(first_label, middle_labels)
-      formatted_labels[length(formatted_labels)] <- paste0(if_else(increment == 0, ">", "≥"), dollar, shorten(lower_breaks[length(lower_breaks)] + increment), unit)
+      formatted_labels[length(formatted_labels)] <- paste0(if_else(increment == 0, ">", "≥"), format_value(lower_breaks[length(lower_breaks)] + increment))
     
   } else {
     # If showing endpoints, use exact values without increment adjustment
-    formatted_labels <- paste0(dollar, shorten(lower_breaks), " to ", 
-                             dollar, shorten(upper_breaks), unit)
+    formatted_labels <- paste0(format_value_no_unit(lower_breaks), " to ", 
+                             format_value(upper_breaks))
   }
 } else {
   formatted_labels <- labels_manual
@@ -1039,13 +1046,18 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
 add_state_labels <- function(plot, map, palette, dollar, unit){
       #yes this is a mess but it works
 
-    adjustments <- tibble::tibble( #these adjustments are needed for labels but aren't good bubble locations
+    adjustments <- tibble( #these adjustments are needed for labels but aren't good bubble locations
   abbr = c("NH", "MA", "CT", "NJ","MD", "RI", "DE", "IN", "VT"), # Indiana adjustment is just so it doesn't overlap with Illinois for long labels
   x_adj = c(-5000, 40000, -35000, 10000, 10000, 10000, 0, 0, -20000),
   y_adj = c(110000, 20000, -20000, -10000, -30000, 10000, 0, 35000, 30000)
 )
-
-    unit = if(unit == "%") "%" else "" #any other unit would take up too much space
+    if(unit == "%"){
+      format_value = append_unit(dollar, unit)
+      percent = "%"
+    } else {
+      format_value = append_unit(dollar, "")
+      percent = ""
+    }
     
 map <- map |>
   left_join(adjustments, by = "abbr") |>
@@ -1054,9 +1066,11 @@ map <- map |>
     y = coalesce(y + y_adj, y)
   ) |>
   select(-x_adj, -y_adj) |>
-  mutate(label = sapply(Value, shorten),
-         label = if_else(abs(Value) < 0.01 & Value != 0, "<0.01", label),
-         label = if_else(is.na(label), "", paste0(dollar, label, unit)))
+  mutate(label = format_value(Value),
+         label = case_when(Value < 0.01 & Value > 0 ~ paste0("<", dollar, "0.01", percent), 
+                           Value > -0.01 & Value < 0 ~ paste0(">-", dollar, "0.01", percent), #this will look kind of weird but idk what else to do to avoid signif making super long labels for very small numbers
+                           T ~ label
+                           ))
 
       plot <- plot + geom_text(data = map %>% filter(!(abbr %in% c( "DC","DE", "RI", "NJ", "HI", "VT", "CT", "MA", "NH", "MD"))), aes(x = x, y = y, label = label, color = text_color), size = 4, fontface = "bold") +
         scale_color_identity() +
