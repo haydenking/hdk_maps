@@ -6,6 +6,7 @@ editor: source
 
 ```{r}
 #https://www.bea.gov/data/gdp/gdp-county-metro-and-other-areas
+library(tools)
 wd = "/Users/Hayden/Maps/"
 datapath_bea = paste0(wd, "Data/BEA/")
 
@@ -44,8 +45,9 @@ industries_states <- industries |>
 ```{r}
 #for many industries state level is better
 #unique(us_total$Description)
-industry = "Nondurable goods manufacturing"
-display_name = "Nondurable Goods Manufacturing"
+
+industry = "Professional, scientific, and technical services"
+display_name = "Professional, Scientific, and Technical Services"
 
   industry_total = us_total |> 
     filter(Description == industry)
@@ -65,7 +67,7 @@ map(
   unit = "%",
   # inset_cutoff = 10000,
   # cutoff_column = "pop",
-  breaks = c(2, 5, 10, 20),
+  breaks = c(5, 10, 20),
   palette = list(high_color = "darkgreen")
 )
 
@@ -98,7 +100,7 @@ map(
   years = 2023,
   caption_manual = "Source: US Bureau of Economic Analysis",
   unit = "%",
-  breaks = c(3,5,7),
+  breaks = c(4,6,8,10),
   palette = list(high_color = "darkgreen")
 )
 
@@ -138,24 +140,23 @@ map(
 #   palette = list(high_color = "darkgreen")
 # )
 
-# map(
-#   data = industries_states |>
-#     filter(Description == industry) |>
-#     mutate(Value = GDP),
-#   map = state_map,
-#   state_map = state_map,
-#   bubbles = F,
-#   title = paste0(display_name, " GDP Per Capita"),
-#   subtitle = paste0("National Average: $", shorten(industry_total$GDP/ sum(county_map$pop))),
-#   source = "BEA",
-#   years = 2023,
-#   caption_manual = "Source: US Bureau of Economic Analysis",
-#   unit = "$",
-#   per = "capita",
-#   breaks = c(3000, 6000, 9000),
-#   increment = 1,
-#   palette = list(high_color = "darkblue")
-# )
+map(
+  data = industries_states |>
+    filter(Description == industry) |>
+    mutate(Value = GDP),
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = paste0(display_name, " GDP Per Capita"),
+  subtitle = paste0("National Average: $", shorten(industry_total$GDP/ sum(county_map$pop))),
+  source = "BEA",
+  years = 2023,
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  unit = "$",
+  per = "capita",
+  breaks = c(500, 750, 1000),
+  palette = list(high_color = "darkgreen")
+)
 ```
 
 
@@ -182,11 +183,12 @@ map(
   unit = "$",
   per = "capita",
   inset_cutoff = 50000,
+  cutoff_column = "pop",
   inset_style = "split",
   breaks = c(40000, 50000, 70000, 100000, 140000),
-  cutoff_column = "pop",
   palette = list(high_color = "darkgreen")
 )
+#Loving County, TX has 238m GDP per capita!
 
 map(
   data = industries_county |>
@@ -202,8 +204,7 @@ map(
   caption_manual = "Source: US Bureau of Economic Analysis",
   year = 2023,
   unit = "$",
-  palette = list(high_color = "darkgreen",
-                 mid_color = "lightgreen")
+  palette = list(high_color = "darkgreen")
 )
 
 map(
@@ -220,15 +221,39 @@ map(
   caption_manual = "Source: US Bureau of Economic Analysis",
   year = 2023,
   unit = "$",
-  palette = list(high_color = "darkgreen",
-                 mid_color = "lightgreen")
+  palette = list(high_color = "darkgreen")
 )
 
-map(
-  data = industries_states |>
+# map(
+#   data = industries_states |>
+#     select(fips, totalGDP) |>
+#     rename(Value = totalGDP) |>
+#     distinct(),
+#   map = state_map,
+#   state_map = state_map,
+#   bubbles = F,
+#   title = "GDP Per Capita",
+#   subtitle = paste0("National Average: $", shorten(industry_total$GDP/ sum(county_map$pop))),
+#   source = "BEA",
+#   caption_manual = "Source: US Bureau of Economic Analysis",
+#   year = 2023,
+#   unit = "$",
+#   per = "capita",
+#   inset_style = "split",
+#   breaks = c(65000, 75000, 85000, 95000),
+#   palette = list(high_color = "darkgreen")
+# )
+
+gdp_states = industries_states |>
     select(fips, totalGDP) |>
-    rename(Value = totalGDP) |>
-    distinct(),
+    distinct()
+gdp_county = industries_county |>
+    select(fips, totalGDP) |>
+    distinct()
+
+map(
+  data = gdp_states |>
+    rename(Value = totalGDP),
   map = state_map,
   state_map = state_map,
   bubbles = F,
@@ -240,10 +265,495 @@ map(
   unit = "$",
   per = "capita",
   inset_style = "split",
+  scale_center = 84000,
+  breaks = c(4000, 12000, 20000),
+)
+```
+
+```{r}
+personalincome = read.csv(paste0(datapath_bea,"CAINC1__ALL_AREAS_1969_2023.csv")) |>
+  mutate(fips = str_trim(GeoFIPS),
+         Description = str_trim(Description)) |>
+  rename(Value = X2023) |>
+  mutate(Value = as.numeric(Value),
+    Value = if_else(Description == "Personal income (thousands of dollars)", 1000*Value, Value)) |>
+  select(fips, Description, GeoName, Value)
+
+# pi_total <- personalincome |>
+#   filter(fips == "00000",
+#          str_detect(Description, "Per capita"))
+pi_county <- personalincome |>
+  filter(Description == "Personal income (thousands of dollars)",
+         str_sub(fips, start = 3, end = 5) != "000",
+         fips != "00000")
+pi_states <- personalincome |>
+  filter(Description == "Personal income (thousands of dollars)",
+         str_sub(fips, start = 3, end = 5) == "000",
+         fips != "00000") |>
+  mutate(fips = str_sub(fips, end = 2)) |>
+  filter(as.numeric(fips) < 57)
+
+#state
+map(
+  data = pi_states,
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = "Personal Income Per Capita",
+  subtitle = paste0("National Average: $", shorten(sum(pi_states$Value / sum(county_map$pop)))),
+  source = "BEA",
+  caption_manual = "Source: US Bureau of Economic Analysis",
   year = 2023,
-  breaks = c(65000, 75000, 85000, 95000),
-  palette = list(high_color = "darkgreen",
-                 mid_color = "lightgreen")
+  unit = "$",
+  per = "capita",
+  scale_center = 71000,
+  breaks = c(3000, 9000, 15000),
+  inset_style = "split"
+)
+
+#county
+map(
+  data = pi_county,
+  map = county_map_bea,
+  state_map = state_map,
+  bubbles = F,
+  title = "Personal Income Per Capita",
+  subtitle = paste0("National Average: $", shorten(sum(pi_states$Value) / sum(county_map$pop))),
+  source = "BEA",
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  year = 2023,
+  unit = "$",
+  per = "capita",
+  scale_center = 65000,
+  breaks = c(5000, 15000, 25000),
+  inset_cutoff = 50000,
+  cutoff_column = "pop",
+  inset_style = "split"
+)
+
+
+state_diff = pi_states |>
+  rename(PI = Value) |>
+  left_join(gdp_states, by = "fips") |>
+  mutate(Value = totalGDP - PI)
+
+#state diff
+map(
+  data = state_diff,
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = "Difference Between GDP And Personal Income Per Capita",
+  subtitle = paste0("National Average: +$", shorten((industry_total$GDP/ sum(county_map$pop))-  sum(pi_states$Value) / sum(county_map$pop))),
+  source = "BEA",
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  year = 2023,
+  unit = "$",
+  per = "capita",
+  scale_center = 0,
+  inset_style = "split"
+)
+
+county_diff = pi_county |>
+  rename(PI = Value) |>
+  left_join(gdp_county, by = "fips") |>
+  mutate(Value = totalGDP - PI)
+
+#county diff
+map(
+  data = county_diff,
+  map = county_map_bea,
+  state_map = state_map,
+  bubbles = F,
+  title = "Difference Between GDP And Personal Income Per Capita",
+  subtitle = paste0("National Average: +$", shorten((industry_total$GDP/ sum(county_map$pop))-  sum(pi_states$Value) / sum(county_map$pop))),
+  source = "BEA",
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  year = 2023,
+  unit = "$",
+  per = "capita",
+  # inset_cutoff = 50000,
+  # cutoff_column = "pop",
+  inset_style = "split",
+  scale_center = 0,
+  breaks = c(5000, 15000, 25000, 35000)
+)
+```
+
+```{r}
+get_inflation_multiplier <- function(start_year = 2000, end_year = 2023) {
+  multiplier = read_csv(paste0("CPIAUCSL.csv")) |>
+    mutate(observation_date = str_sub(observation_date, end = 4),
+           year = as.numeric(observation_date)) |>
+    select(-observation_date) |>
+    filter(year == start_year | year == end_year) |>
+    rename(cpi = CPIAUCSL) |>
+    pivot_wider(names_from = year, values_from = cpi) |>
+    rename(start_year = !!as.character(start_year),
+           end_year = !!as.character(end_year)) |>
+    mutate(multiplier = end_year / start_year) |>
+    pull(multiplier)
+  return(multiplier)
+}
+```
+
+```{r}
+real_personal_income_growth <- function(start_year = 2000, end_year = 2023) {
+  multiplier = get_inflation_multiplier(start_year, end_year)
+  
+data = read.csv(paste0(datapath_bea,"CAINC1__ALL_AREAS_1969_2023.csv")) |>
+    filter(str_detect(Description, "Per capita")) |>
+  mutate(fips = str_trim(GeoFIPS),
+         Description = str_trim(Description)) |>
+  rename(start_year = !!paste0("X", start_year),
+         end_year = !!paste0("X", end_year)) |>
+  mutate(end_year = as.numeric(end_year),
+         start_year = as.numeric(start_year)) |>
+    mutate(start_year = start_year * multiplier,
+           Value = end_year / start_year - 1) |>
+    select(fips, Value, GeoName)
+return(data)
+}
+```
+
+```{r}
+#add us total
+y1 = 2000
+pi_overtime = real_personal_income_growth(start_year = y1)
+
+pi_national = pi_overtime |>
+  filter(fips == "00000") |>
+  pull(Value)
+
+pi_data_county = pi_overtime |>
+  filter(str_sub(fips, start = 3, end = 5) != "000")
+
+pi_data_state = pi_overtime |>
+  filter(str_sub(fips, start = 3, end = 5) == "000") |>
+  mutate(fips = str_sub(fips, end = 2))
+
+  map(
+    data = pi_data_county,
+    map = county_map_bea,
+    state_map = state_map,
+    bubbles = F,
+    title = paste0("Real Per Capita Income Growth ",y1,"-2023"),
+    subtitle = paste0("National Average: " , signif(100 * pi_national, 2), "%"),
+    source = "BEA",
+    caption_manual = "Source: US Bureau of Economic Analysis",
+    unit = "%",
+    inset_style = "split",
+    scale_center = 30,
+    breaks = c(5, 15, 25, 35),
+    # scale_center = 20,
+    # breaks = c(5, 15, 25),
+    inset_cutoff = 10000,
+    cutoff_column = "pop",
+    palette = list(high_color = "blue",
+                   low_color = "red")
+  )
+
+  map(
+    data = pi_data_state,
+    map = state_map,
+    state_map = state_map,
+    bubbles = F,
+    title = paste0("Real Per Capita Income Growth ",y1,"-2023"),
+    subtitle = paste0("National Average: " , signif(100 * pi_national, 2), "%"),
+    source = "BEA",
+    caption_manual = "Source: US Bureau of Economic Analysis",
+    unit = "%",
+    inset_style = "split",
+    scale_center = 27.5,
+    # scale_center = 22.5,
+    breaks = c(2.5, 7.5, 12.5),
+    palette = list(high_color = "blue",
+                   low_color = "red")
+  )
+```
+
+#RPP personal income
+```{r}
+multiplier = 1.32 #june 2017 to june 2025 CPI (data is in 2017 dollars)
+
+rpp_personal_income = read.csv("Data/BEA/SARPP_STATE_2008_2023.csv") |>
+  mutate(fips = str_trim(GeoFIPS),
+         Description = str_trim(Description)) |>
+  filter(str_detect(Description, "Real per capita personal income")) |>
+  rename(Value = X2023) |>
+  mutate(Value = as.numeric(Value)*multiplier) |>
+  select(fips, Description, GeoName, Value)
+
+rpp_national = rpp_personal_income |>
+  filter(fips == "00000") |>
+  pull(Value)
+
+rpp_data_state = rpp_personal_income |>
+  filter(str_sub(fips, start = 3, end = 5) == "000") |>
+  mutate(fips = str_sub(fips, end = 2))
+
+  map(
+    data = rpp_data_state,
+    map = state_map,
+    state_map = state_map,
+    bubbles = F,
+    title = "Purchasing Power Adjusted Real Personal Income Per Capita",
+    year = 2023,
+    subtitle = paste0("National Average: $" , comma_format()(round(pi_national))),
+    source = "BEA",
+    caption_manual = "Source: US Bureau of Economic Analysis",
+    unit = "$",
+    inset_style = "split",
+    breaks = c(65000, 70000, 75000, 80000, 85000),
+    palette = list(high_color = "darkgreen")
+  )
+  
+personal_income = read.csv(paste0(datapath_bea,"CAINC1__ALL_AREAS_1969_2023.csv")) |>
+    filter(str_detect(Description, "Per capita")) |>
+  mutate(Value = as.numeric(X2023)*1.06) |> #convert from 2023 dollars to 2025 dollars
+  mutate(fips = str_trim(GeoFIPS),
+         Description = str_trim(Description)) |>
+    select(fips, Description, Value, GeoName)
+
+pi_data_state = personal_income |>
+  filter(str_sub(fips, start = 3, end = 5) == "000") |>
+  mutate(fips = str_sub(fips, end = 2))
+
+  map(
+    data = pi_data_state,
+    map = state_map,
+    state_map = state_map,
+    bubbles = F,
+    title = "Real Personal Income Per Capita",
+    year = 2023,
+    subtitle = paste0("National Average: $" , comma_format()(round(pi_national))), #we can use the same national number because the regional adjustments have no effect on the total
+    source = "BEA",
+    caption_manual = "Source: US Bureau of Economic Analysis",
+    unit = "$",
+    inset_style = "split",
+    breaks = c(65000, 70000, 75000, 80000, 85000),
+    palette = list(high_color = "darkgreen")
+  )
+```
+#metro-level
+```{r}
+rpp_msa = read.csv(paste0(datapath_bea,"MARPP_MSA_2008_2023.csv")) |>
+  mutate(fips = str_trim(GeoFIPS),
+         name = str_remove(GeoName," \\(.*")) |>
+  filter(!is.na(GeoName),
+    str_detect(Description, "Real per capita personal income")) |>
+  rename(Value = X2023) |>
+  mutate(Value = as.numeric(Value)*1.06) |>
+  select(Description, name, Value)
+
+  map(
+    data = rpp_msa,
+    map = MSA_map,
+    state_map = state_map,
+    bubbles = F,
+    title = "Purchasing Power Adjusted Real Personal Income Per Capita",
+    year = 2023,
+    subtitle = paste0("National Average: $" , comma_format()(round(pi_national))), #we can use the same national number because the regional adjustments have no effect on the total
+    source = "BEA",
+    caption_manual = "Source: US Bureau of Economic Analysis",
+    unit = "$",
+    inset_style = "split",
+    breaks = c(50000, 60000, 70000, 80000),
+    obs_units = "MSAs",
+    palette = list(high_color = "darkgreen")
+  )
+```
+
+#personal consumption
+```{r}
+#make maps of PC per capita and then different sectors as a percent of total
+
+#replace SAPCE2__ALL_AREAS_1997_2023.csv with SAPCE3__ALL_AREAS_1997_2023.csv for very fine categories
+personal_consumption = read.csv(paste0(datapath_bea,"SAPCE2__ALL_AREAS_1997_2023.csv")) |>
+  mutate(fips = str_trim(GeoFIPS),
+         Description = str_trim(Description)) |>
+  rename(Value = X2023) |>
+  mutate(Value = as.numeric(Value),
+         fips = str_sub(fips, end = 2)) |>
+  select(fips, Description, GeoName, Value)
+
+pc_national = personal_consumption |>
+  filter(fips == "00",
+         Description == "Per capita personal consumption expenditures") |>
+  pull(Value)
+
+map(
+  data = personal_consumption |>
+    filter(Description == "Per capita personal consumption expenditures"),
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = "Personal Consumption Expenditures Per Capita",
+  year = 2023,
+  subtitle = paste0("National Average: $" , comma_format()(round(pc_national))),
+  source = "BEA",
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  unit = "$",
+  breaks = c(50000, 55000, 60000, 65000),
+  inset_style = "split",
+  palette = list(high_color = "darkgreen")
+)
+```
+
+PC per capita as a percent of total by category
+```{r}
+pc_totals = personal_consumption |>
+  filter(Description == "Per capita personal consumption expenditures") |>
+  rename(total = Value) |>
+  select(fips, total)
+
+pc_data_state = personal_consumption |>
+  rename(PC = Value) |>
+  left_join(pc_totals, by = "fips") |>
+  mutate(portion = PC / total)
+```
+
+```{r}
+#for SAPCE2
+#Housing and utilities
+#Transportation services
+#Motor vehicles and parts
+#Gasoline and other energy goods
+#Health care
+#Clothing and footwear
+#Health care
+type = "Motor vehicles and parts"
+display_name = toTitleCase(type)
+
+pc_national = pc_data_state |> 
+  filter(fips == "00",
+    Description == type) |>
+  mutate(portion = portion*100) |>
+  pull(portion)
+
+map(
+  data = pc_data_state |>
+    rename(Value = portion) |>
+    filter(Description == type),
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = paste0(display_name, " as a Portion of Personal Consumption Expenditures"),
+  year = 2023,
+  subtitle = paste0("National Average: " , round(pc_national, 2), "%"),
+  source = "BEA",
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  unit = "%",
+  breaks = c(3,4,5,6),
+  inset_style = "split",
+  palette = list(high_color = "maroon")
+)
+
+pc_national = pc_data_state |> 
+  filter(fips == "00",
+    Description == type) |>
+  pull(PC)
+
+map(
+  data = pc_data_state |>
+    rename(Value = PC) |>
+    filter(Description == type),
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = paste0("Per Capita Consumption of ", display_name),
+  year = 2023,
+  subtitle = paste0("National Average: $" , comma_format()(round(pc_national))),
+  source = "BEA",
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  unit = "$",
+  breaks = c(2000, 2400, 2800),
+  inset_style = "split",
+  palette = list(high_color = "maroon")
+)
+```
+
+```{r}
+#SAPCE3__ALL_AREAS_1997_2023 for more aggregated, SAPCE4__ALL_AREAS_1997_2023 for most granular
+personal_consumption = read.csv(paste0(datapath_bea,"SAPCE4__ALL_AREAS_1997_2023.csv")) |>
+  mutate(fips = str_trim(GeoFIPS),
+         Description = str_trim(Description)) |>
+  rename(Value = X2023) |>
+  mutate(Value = 1000000 * as.numeric(Value),
+         Value = replace_na(Value, 0),
+         fips = str_sub(fips, end = 2)) |>
+  select(fips, Description, GeoName, Value)
+
+pc_totals = personal_consumption |>
+  filter(Description == "Personal consumption expenditures") |>
+  rename(total = Value) |>
+  select(fips, total)
+
+pc_data_state = personal_consumption |>
+  left_join(pc_totals, by = "fips") |>
+  mutate(portion = Value / total)
+```
+
+```{r}
+# Musical instruments  c(15, 25, 35, 45)
+# Tobacco  c(300, 350, 400, 450)
+# Gambling c(400, 600, 800)
+# Electricity c(600, 700, 800)
+# Natural gas c(150, 200, 250, 300)
+# Foreign travel by U.S. residents c(400, 550, 700, 850, 1000)
+# Pets, pet products, and related services c(500, 600, 700)
+
+type = "Pets, pet products, and related services"
+display_name = toTitleCase(type)
+
+pc_national = pc_data_state |> 
+  filter(fips == "00",
+    Description == type) |>
+  mutate(Value = Value / sum(state_map$pop23)) |>
+  pull(Value)
+
+map(
+  data = pc_data_state |>
+    filter(Description == type),
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = paste0("Per Capita Expenditures on ", display_name),
+  year = 2023,
+  per = "capita",
+  subtitle = paste0("National Average: $" , comma_format()(round(pc_national))),
+  source = "BEA",
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  unit = "$",
+  breaks = c(500, 600, 700),
+  inset_style = "split",
+  palette = list(high_color = "maroon")
+)
+
+pc_national = pc_data_state |> 
+  filter(fips == "00",
+    Description == type) |>
+  mutate(portion = portion*100) |>
+  pull(portion)
+
+map(
+  data = pc_data_state |>
+    select(-Value) |>
+    rename(Value = portion) |>
+    filter(Description == type),
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  #title = paste0(display_name, " as a Portion of Personal Consumption Expenditures"),
+  title = "Net Gambling Losses as a Portion of Personal Consumption Expenditures (2023)",
+  year = 2023,
+  subtitle = paste0("National Average: " , round(pc_national, 2), "%"),
+  source = "BEA",
+  caption_manual = "Source: US Bureau of Economic Analysis",
+  unit = "%",
+  breaks = c(0.75, 1, 1.25),
+  inset_style = "split",
+  palette = list(high_color = "maroon")
 )
 ```
 
