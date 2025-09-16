@@ -437,9 +437,9 @@ shorten <- function(value) {
 
     abs_val <- abs(v)
 
-    if (abs_val >= 1000 && abs_val < 10000) {
-      return(comma_format()(round(v)))
-    }
+    # if (abs_val >= 1000 && abs_val < 10000) {
+    #   return(comma_format()(round(v)))
+    # }
 
     thresholds <- c(1e12, 1e9, 1e6, 1e3, 1)
     suffixes   <- c("t",   "b",  "m",  "k", "")
@@ -447,7 +447,8 @@ shorten <- function(value) {
     for (i in seq_along(thresholds)) {
       if (abs_val >= thresholds[i]) {
         display_value <- v / thresholds[i]
-        sigfigs <- if (display_value >= 100) 3 else 2
+        sigfigs = 3
+        # sigfigs <- if (display_value >= 100) 3 else 2
         return(paste0(signif(display_value, sigfigs), suffixes[i]))
       }
     }
@@ -609,8 +610,8 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
       legend.title = element_blank(),
       legend.text = element_text(size = 14, color = palette$text_color, face = "bold"), #if_else(bubbles, 14, 12)
       # legend.position = "bottom",
-      # legend.position.inside = c(left_margin, -0.02), #need to change from legend.position due to deprecation
-      legend.position = c(left_margin, -0.02),
+      legend.position = "inside",
+      legend.position.inside = c(left_margin, -0.02),
       legend.justification = "left",
       legend.direction = "horizontal",
       legend.key.width = unit(if_else(bubbles, min(sqrt(max_bubble_size)/4, 0.75), 0.5), "cm"),
