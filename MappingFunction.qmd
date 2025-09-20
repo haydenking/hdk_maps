@@ -504,6 +504,10 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
         filter(cutoff >= inset_cutoff,
            !is.na(Value),
            !is.na(name))
+  if(level == "state"){
+    inset_data <- inset_data |>
+      filter(fips != "11") # Take out DC because people complained
+  }
 
   if(logratio){
     inset_data <- inset_data |>
@@ -1046,11 +1050,11 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
 ```{r}
 add_state_labels <- function(plot, map, palette, dollar, unit){
       #yes this is a mess but it works
-
+  
     adjustments <- tibble( #these adjustments are needed for labels but aren't good bubble locations
-  abbr = c("NH", "MA", "CT", "NJ","MD", "RI", "DE", "IN", "VT"), # Indiana adjustment is just so it doesn't overlap with Illinois for long labels
-  x_adj = c(-5000, 40000, -35000, 10000, 10000, 10000, 0, 0, -20000),
-  y_adj = c(110000, 20000, -20000, -10000, -30000, 10000, 0, 35000, 30000)
+  abbr = c("NH", "MA", "CT", "NJ","MD", "RI", "DE", "IN", "VT", "DC"), # Indiana adjustment is just so it doesn't overlap with Illinois for long labels
+  x_adj = c(-5000, 40000, -35000, 10000, 10000, 10000, 0, 0, -20000, 450000),
+  y_adj = c(110000, 20000, -20000, -10000, -30000, 10000, 0, 35000, 30000, -350000)
 )
     if(unit == "%"){
       format_value = append_unit(dollar, unit)
@@ -1099,6 +1103,23 @@ map <- map |>
         geom_text_repel(data = map %>% filter(abbr == "MD"),
                            aes(x = x, y = y, label = label),
                            box.padding = 2, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100)
+      
+dc_row <- map |> filter(fips == "11")
+  if (nrow(dc_row) == 1) {
+    dc_row <- dc_row %>%
+      mutate(label = paste0("DC: ", label))
+    
+  plot <- plot +
+    geom_label(
+      data = dc_row,
+      aes(x = x, y = y, label = label),
+      size = 4,
+      fontface = "bold",
+      fill = dc_row$bin_color,
+      color = dc_row$text_color
+    )
+  }
+      
       return(plot)
 }
 ```
