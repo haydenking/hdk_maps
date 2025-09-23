@@ -8,14 +8,74 @@ This file creates and reads in the county_map(\_ag) shapefile and the MSA datase
 
 ```{r}
 wd = "/Users/Hayden/Maps/"
+library(stringr)
+library(tidyr)
 library(dplyr)
 library(readxl)
+library(readr)
 library(usmap)
 library(sf)
+library(tigris)
+```
+
+```{r}
+
+
+pr_municipios <- counties(state = "PR", cb = TRUE, resolution = "5m") |>
+  mutate(county = NAMELSAD,
+         fips = paste0("72", COUNTYFP),
+         abbr = "PR",
+         state = "Puerto Rico") |>
+  select(fips, county, abbr, state)
+pr_state <- states("PR", resolution = "20m") #might need better resolution once I figure out how to scale these up
+
+pr_municipios <- st_transform(pr_municipios, 4326)
+pr_municipios <- pr_municipios |>
+  mutate(county = NAMELSADCO,
+         name = paste0(county, ", PR"),
+         fips = paste0("72", COUNTYFP),
+         abbr = "PR",
+         state = "Puerto Rico",
+         sqmi = ALAND / 2589988.110336, #convert from square meters to square miles
+         pop = NA,
+         pop10 = NA,
+         pop11 = NA,
+         pop12 = NA,
+         pop13 = NA,
+         pop14 = NA,
+         pop15 = NA,
+         pop16 = NA,
+         pop17 = NA,
+         pop18 = NA,
+         pop19 = NA,
+         pop20 = NA,
+         pop21 = NA,
+         pop22 = NA,
+         pop23 = NA) |>
+  select(-ALAND, -COUNTYFP, -NAMELSADCO)
+
+
+
+usa = rbind(county_map_planningregions |> st_transform(4326), pr_municipios)
+
+
+usa_shifted = usa
+
+pr_idx <- usa_shifted$abbr == "PR"
+#I'd like to scale up PR but everything I've tried distorts the shape terribly
+
+st_geometry(usa_shifted)[pr_idx] <- st_geometry(usa_shifted)[pr_idx] + c(-11, 13)
+
+usa_shifted <- st_transform(usa_shifted, usmap_crs())
+# 
+# ggplot(usa_shifted) +
+#   geom_sf(fill = "lightblue", color = "black") +
+#   theme_minimal() +
+#   labs(title = "USA with Puerto Rico Shifted")
+# #ADD PR to state_map
 ```
 
 #Read in pre-saved maps
-
 ```{r}
   # county_map = construct_county_map()
   # st_write(county_map, "county_map/county_map.shp", delete_dsn = T)
@@ -34,17 +94,37 @@ library(sf)
   
   #Constructed later in this file
   MSA_map = st_read(paste0(wd, "MSA_map/MSA_map.shp"))
+  MSAs = read_csv(paste0(wd,"MSAs_crosswalk.csv"))
 ```
 
-
 ```{r}
-construct_county_map <- function(planningregions = F, va_merge = F, ag_districts = F, maui_merge = F) {
+#To do: Add yearly populations and areas for Puerto Rico Municipios
+construct_county_map <- function(planningregions = F, va_merge = F, ag_districts = F, maui_merge = F, pr = T) {
 
 county_map <- us_map("counties") |>
   rename(state = full,
          geometry = geom) |>
   mutate(county = if_else(abbr == "DC", "Washington", county)) |>
   select(fips, county, abbr, state)
+
+if(pr){
+  pr_municipios <- counties(state = "PR", cb = TRUE, resolution = "5m") |>
+  mutate(county = NAMELSAD,
+         fips = paste0("72", COUNTYFP),
+         abbr = "PR",
+         state = "Puerto Rico") |>
+  select(fips, county, abbr, state)
+  
+  pr_municipios <- st_transform(pr_municipios, 4326)
+  
+  st_geometry(pr_municipios) <- st_geometry(pr_municipios) + c(-11, 13) #Shift PR to be off the coast of Georgia
+  
+  st_crs(pr_municipios) <- 4326 # Restore CRS (lost after shifting)
+  
+  pr_municipios <- st_transform(pr_municipios, usmap_crs())
+  
+  county_map = rbind(county_map, pr_municipios)
+}
 
 if(!planningregions){
   county_map <- county_map |>
@@ -95,7 +175,7 @@ county_pops1019 = read_xlsx(paste0(wd,"county_pops10-19.xlsx")) |>
 county_map = left_join(county_map, county_pops1019, by = c("county", "state"))
 
 #2020-2023 pops from here: https://www.census.gov/data/tables/time-series/demo/popest/2020s-counties-total.html
-#these data use CT planning regions
+#these data use CT planning regions :/
   #maybe read this directly from the internet for easy updating?
 county_pops_recent = read_xlsx(paste0(wd,"county_pops20-23.xlsx")) |>
   mutate(county = str_remove(county, "^\\."),
@@ -245,30 +325,29 @@ return(county_map)
 }
 ```
 
+#Create MSA crosswalks
 ```{r}
 #https://www.census.gov/geographies/reference-files/time-series/demo/metro-micro/historical-delineation-files.html
 #This version has CT historical counties
-MSAs = read_xls(paste0(wd,"MSAs.xls")) 
+
+
+# MSAs = read_xls(paste0(wd,"MSAs.xls"))
 
 #https://www.census.gov/geographies/reference-files/time-series/demo/metro-micro/delineation-files.html
 #Version with CT planning regions
-#MSAs = read_xls(paste0(wd,"MSAs_planningregions.xls")) 
-```
+# MSAs = read_xls(paste0(wd,"MSAs_planningregions.xls"))
 
-```{r}
-MSAs <- MSAs|>
-  rename(st_FIPS = `FIPS State Code`,
-         co_FIPS = `FIPS County Code`,
-         area_type = `Metropolitan/Micropolitan Statistical Area`,
-         metro_name = `CBSA Title`,
-         cbsa_code = `CBSA Code`) |>
-  mutate(fips = paste0(st_FIPS, co_FIPS),
-         area_type = case_when(area_type == "Metropolitan Statistical Area" ~ "metro", area_type == "Micropolitan Statistical Area" ~ "micro", T ~ NA))
-```
-
-```{r}
-MSAs_crosswalk = MSAs |>
-  select(cbsa_code, metro_name, fips)
+# MSAs <- MSAs|>
+#   rename(st_FIPS = `FIPS State Code`,
+#          co_FIPS = `FIPS County Code`,
+#          area_type = `Metropolitan/Micropolitan Statistical Area`,
+#          metro_name = `CBSA Title`,
+#          cbsa_code = `CBSA Code`) |>
+#   mutate(fips = paste0(st_FIPS, co_FIPS),
+#          area_type = case_when(area_type == "Metropolitan Statistical Area" ~ "metro", area_type == "Micropolitan Statistical Area" ~ "micro", T ~ NA))
+# 
+# MSAs_crosswalk = MSAs |>
+#   select(cbsa_code, metro_name, fips)
 # write.csv(MSAs_crosswalk, "MSAs_crosswalk.csv", row.names = F)
 ```
 
@@ -291,6 +370,11 @@ MSA_map = county_map |>
 ```{r}
 #For saving MSA_map
 #st_write(MSA_map, "MSA_map/MSA_map.shp", delete_dsn = TRUE)
+
+#When redoing this with PR it gave me this, haven't tested if it still works
+# Writing 2244 features with 19 fields and geometry type Unknown (any).
+# Warning in CPL_write_ogr(obj, dsn, layer, driver, as.character(dataset_options),  :
+#   GDAL Message 1: Value '72077, 72151, 72029, 72035, 72105, 72033, 72091, 72101, 72041, 72051, 72039, 72025, 72061, 72145, 72063, 72037, 72129, 72021, 72031, 72103, 72054, 72095, 72009, 72017, 72087, 72137, 72127, 72139, 72143, 72135, 72053, 72069, 72107, 72119, 72089, 72085, 72019, 72045, 72007, 72047' of field fips has been truncated to 254 characters.  This warning will not be emitted any more for that layer.
 ```
 
 #Function that converts CBSA to FIPS codes
