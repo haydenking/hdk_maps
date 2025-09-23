@@ -243,24 +243,25 @@ if("fips" %in% colnames(data)){
     inset_text = paste0(top, "\n",bottom)
     }
   }
-  drop_cols = c("PR", "GU", "VI", "AS", "MP")
+  drop_cols = c("GU", "VI", "AS", "MP")
+  
+  pr = map |> filter(subtr(fips, 1, 2) == "72")
+  if(all(is.na(pr$Value))) {
+    drops_cols = c(drop_cols, "PR")
+  }
   
   #THIS WILL CRASH ZIP MAP UNTIL FIXED
-    if (continental) { #filter out AK and HI after inset
+    if (continental) { #filter out AK, HI, and PR after inset
       if("abbr" %in% colnames(map)) {
-        drop_cols = c(drop_cols, "AK", "HI")
+        drop_cols = c(drop_cols, "AK", "HI", "PR")
       } else{
-     map <- map |>
-      filter(!str_detect(name, ", HI$"),
-             !str_detect(name, ", AK$"),
-             !str_detect(name, ", PR$"),
-             !str_detect(name, ", VI$"),
-             !str_detect(name, ", GU$"),
-             !str_detect(name, ", AS$"),
-             !str_detect(name, ", MP$"))  
+        for(abbr in drop_cols){
+          map <- map |>
+            filter(!str_detect(name, paste0(", ", abbr, "$")))
+        }
       }
   state_map <- state_map |>
-    filter(!abbr %in% c("AK", "HI"))
+    filter(!abbr %in% c("AK", "HI", "PR"))
   }
   
   if("abbr" %in% colnames(map)){
@@ -292,6 +293,7 @@ if("fips" %in% colnames(data)){
     createfolder = ""
     while(!createfolder %in% c("Y", "N")){
       createfolder = readline(prompt = paste0("Create folder '", source ,"'?[Y/N]\n"))
+      createfolder <- toupper(createfolder) # So it isn't case sensitive
       if(createfolder == "Y"){
         dir.create(graphicspath, recursive = T) #recursive = T means that it will create the Maps folder too if it is missing
       } else if(createfolder == "N"){
@@ -504,11 +506,16 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
         filter(cutoff >= inset_cutoff,
            !is.na(Value),
            !is.na(name))
+  
+  # Taking out DC because people complained
   if(level == "state"){
     inset_data <- inset_data |>
-      filter(fips != "11") # Take out DC because people complained
+      filter(fips != "11") 
   }
-
+  # if(level == "county"){
+  #   inset_data <- inset_data |>
+  #     filter(fips != "11001")
+  # }
   if(logratio){
     inset_data <- inset_data |>
       mutate(Value = exp(Value))
@@ -546,11 +553,7 @@ inset_data <- inset_data |>
     label = if (hide_values) {
       paste0(rank, name)
     } else {
-      paste0(
-        rank, name, ": ",
-        plus,
-        format_value(Value)
-      )
+      paste0(rank, name, ": ", plus, format_value(Value))
     }
   )
 
@@ -1051,7 +1054,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
 add_state_labels <- function(plot, map, palette, dollar, unit){
       #yes this is a mess but it works
   
-    adjustments <- tibble( #these adjustments are needed for labels but aren't good bubble locations
+  adjustments <- tibble( #these adjustments are needed for labels but aren't good bubble locations
   abbr = c("NH", "MA", "CT", "NJ","MD", "RI", "DE", "IN", "VT", "DC"), # Indiana adjustment is just so it doesn't overlap with Illinois for long labels
   x_adj = c(-5000, 40000, -35000, 10000, 10000, 10000, 0, 0, -20000, 450000),
   y_adj = c(110000, 20000, -20000, -10000, -30000, 10000, 0, 35000, 30000, -350000)
@@ -1077,7 +1080,7 @@ map <- map |>
                            T ~ label
                            ))
 
-      plot <- plot + geom_text(data = map %>% filter(!(abbr %in% c( "DC","DE", "RI", "NJ", "HI", "VT", "CT", "MA", "NH", "MD"))), aes(x = x, y = y, label = label, color = text_color), size = 4, fontface = "bold") +
+      plot <- plot + geom_text(data = map %>% filter(!(abbr %in% c( "DC","DE", "RI", "NJ", "HI", "VT", "CT", "MA", "NH", "MD", "PR"))), aes(x = x, y = y, label = label, color = text_color), size = 4, fontface = "bold") +
         scale_color_identity() +
   geom_text_repel(data = map %>% filter(abbr %in% c("DE", "HI")),
                            aes(x = x, y = y, label = label),
@@ -1102,9 +1105,12 @@ map <- map |>
                            box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = 100) +
         geom_text_repel(data = map %>% filter(abbr == "MD"),
                            aes(x = x, y = y, label = label),
-                           box.padding = 2, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100)
+                           box.padding = 2, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100) +
+        geom_text_repel(data = map %>% filter(abbr == "PR"),
+                           aes(x = x, y = y, label = label),
+                           box.padding = 2, size = 4, fontface = "bold",color = palette$text_color, nudge_x = -100, nudge_y = -100)
       
-dc_row <- map |> filter(fips == "11")
+dc_row <- map |> filter(fips == "11", name == "District of Columbia")
   if (nrow(dc_row) == 1) {
     dc_row <- dc_row %>%
       mutate(label = paste0("DC: ", label))
