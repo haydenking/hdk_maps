@@ -18,62 +18,42 @@ library(sf)
 library(tigris)
 ```
 
+#For scaling up Puerto Rico
 ```{r}
+scale_sfc <- function(sfc, centroid, factor) {
+  stopifnot(inherits(sfc, "sfc"))
+  stopifnot(length(centroid) == 2)
 
+  lapply(sfc, function(geom) {
+    if (inherits(geom, "POLYGON")) {
+      # Polygon: list of rings
+      new_rings <- lapply(geom, function(ring) {
+        coords <- ring
+        coords[, 1:2] <- (coords[, 1:2] - matrix(centroid, nrow(coords), 2, byrow = TRUE)) * factor +
+                         matrix(centroid, nrow(coords), 2, byrow = TRUE)
+        coords
+      })
+      st_polygon(new_rings)
 
-pr_municipios <- counties(state = "PR", cb = TRUE, resolution = "5m") |>
-  mutate(county = NAMELSAD,
-         fips = paste0("72", COUNTYFP),
-         abbr = "PR",
-         state = "Puerto Rico") |>
-  select(fips, county, abbr, state)
-pr_state <- states("PR", resolution = "20m") #might need better resolution once I figure out how to scale these up
+    } else if (inherits(geom, "MULTIPOLYGON")) {
+      # Multipolygon: list of polygons, each with list of rings
+      new_polys <- lapply(geom, function(poly) {
+        lapply(poly, function(ring) {
+          coords <- ring
+          coords[, 1:2] <- (coords[, 1:2] - matrix(centroid, nrow(coords), 2, byrow = TRUE)) * factor +
+                           matrix(centroid, nrow(coords), 2, byrow = TRUE)
+          coords
+        })
+      })
+      st_multipolygon(new_polys)
 
-pr_municipios <- st_transform(pr_municipios, 4326)
-pr_municipios <- pr_municipios |>
-  mutate(county = NAMELSADCO,
-         name = paste0(county, ", PR"),
-         fips = paste0("72", COUNTYFP),
-         abbr = "PR",
-         state = "Puerto Rico",
-         sqmi = ALAND / 2589988.110336, #convert from square meters to square miles
-         pop = NA,
-         pop10 = NA,
-         pop11 = NA,
-         pop12 = NA,
-         pop13 = NA,
-         pop14 = NA,
-         pop15 = NA,
-         pop16 = NA,
-         pop17 = NA,
-         pop18 = NA,
-         pop19 = NA,
-         pop20 = NA,
-         pop21 = NA,
-         pop22 = NA,
-         pop23 = NA) |>
-  select(-ALAND, -COUNTYFP, -NAMELSADCO)
-
-
-
-usa = rbind(county_map_planningregions |> st_transform(4326), pr_municipios)
-
-
-usa_shifted = usa
-
-pr_idx <- usa_shifted$abbr == "PR"
-#I'd like to scale up PR but everything I've tried distorts the shape terribly
-
-st_geometry(usa_shifted)[pr_idx] <- st_geometry(usa_shifted)[pr_idx] + c(-11, 13)
-
-usa_shifted <- st_transform(usa_shifted, usmap_crs())
-# 
-# ggplot(usa_shifted) +
-#   geom_sf(fill = "lightblue", color = "black") +
-#   theme_minimal() +
-#   labs(title = "USA with Puerto Rico Shifted")
-# #ADD PR to state_map
+    } else {
+      stop("Unsupported geometry type: ", class(geom)[1])
+    }
+  }) |> st_sfc(crs = st_crs(sfc))
+}
 ```
+
 
 #Read in pre-saved maps
 ```{r}
@@ -116,8 +96,13 @@ if(pr){
   select(fips, county, abbr, state)
   
   pr_municipios <- st_transform(pr_municipios, 4326)
+  pr_centroid <- st_centroid(st_union(pr_municipios))
+  centroid_coords <- st_coordinates(pr_centroid)
+  #scale up by a factor of 2.5 to make it more visible
+  pr_municipios <- pr_municipios %>%
+    mutate(geometry = scale_sfc(geometry, centroid_coords, factor = 2.5))
   
-  st_geometry(pr_municipios) <- st_geometry(pr_municipios) + c(-11, 13) #Shift PR to be off the coast of Georgia
+  st_geometry(pr_municipios) <- st_geometry(pr_municipios) + c(-10, 13) #Shift PR to be off the coast of SC
   
   st_crs(pr_municipios) <- 4326 # Restore CRS (lost after shifting)
   
@@ -142,7 +127,6 @@ if(!planningregions){
   county_map = rbind(county_map, ct_map)
 }
   
-  #don't use the centroids from this because they take into account water area causing those around the Great Lakes to be off
 if(planningregions) {
   areas = read.delim(paste0(wd,"2024_Gaz_counties_national.txt"), stringsAsFactors = FALSE)
 } else {
@@ -394,3 +378,18 @@ cbsa_to_fips = function(cbsa){
 #region_fips = cbsa_to_fips("12060")
 ```
 
+#Test map
+```{r}
+data = county_map |>
+  st_drop_geometry() |>
+  mutate(Value = runif(n = nrow(county_map))) |>
+  select(Value, fips)
+
+map(data = data,
+  map = county_map,
+  bubbles = F,
+  continental = F,
+  title = "County Map Test",
+  source = ""
+)
+```
