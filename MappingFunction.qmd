@@ -4,7 +4,8 @@ format: html
 editor: source
 ---
 ```{r}
-library(tidyverse)
+library(dplyr)
+library(stringr)
 library(readxl)
 library(scales)
 library(ggplot2)
@@ -13,7 +14,6 @@ library(ggfx)
 library(ggrepel)
 library(grid)
 library(colorspace)
-library(viridis)
 library(showtext)
 library(sysfonts)
 
@@ -245,7 +245,7 @@ if("fips" %in% colnames(data)){
   }
   drop_cols = c("GU", "VI", "AS", "MP")
   
-  pr = map |> filter(subtr(fips, 1, 2) == "72")
+  pr = map |> filter(substr(fips, 1, 2) == "72")
   if(all(is.na(pr$Value))) {
     drops_cols = c(drop_cols, "PR")
   }
@@ -488,6 +488,7 @@ set_palette <- function(user_palette) {
 
 #create_inset
 ```{r}
+#Exclude Puerto Rico? Sometimes yes sometimes no? For county maps I don't want it to be the entire top or bottom
 create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff, cutoff_column, logratio, scale_center, hide_values, inset_labels, obs_units, format_value) {
   
   style <- match.arg(style)
@@ -877,8 +878,8 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
   } else {
     if (!is.na(breaks[1])) {
       if (!is.na(scale_center)) {
-        breaks <- unique(breaks)
         breaks <- c(-abs(breaks), abs(breaks))
+        breaks <- unique(breaks)
         breaks <- sort(breaks)
         breaks <- breaks + scale_center
         
@@ -1082,7 +1083,7 @@ map <- map |>
 
       plot <- plot + geom_text(data = map %>% filter(!(abbr %in% c( "DC","DE", "RI", "NJ", "HI", "VT", "CT", "MA", "NH", "MD", "PR"))), aes(x = x, y = y, label = label, color = text_color), size = 4, fontface = "bold") +
         scale_color_identity() +
-  geom_text_repel(data = map %>% filter(abbr %in% c("DE", "HI")),
+  geom_text_repel(data = map %>% filter(abbr %in% c("DE", "HI", "PR")),
                            aes(x = x, y = y, label = label),
                            box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100) +
         geom_text_repel(data = map %>% filter(abbr == "RI"),
@@ -1105,10 +1106,7 @@ map <- map |>
                            box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = 100) +
         geom_text_repel(data = map %>% filter(abbr == "MD"),
                            aes(x = x, y = y, label = label),
-                           box.padding = 2, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100) +
-        geom_text_repel(data = map %>% filter(abbr == "PR"),
-                           aes(x = x, y = y, label = label),
-                           box.padding = 2, size = 4, fontface = "bold",color = palette$text_color, nudge_x = -100, nudge_y = -100)
+                           box.padding = 2, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100)
       
 dc_row <- map |> filter(fips == "11", name == "District of Columbia")
   if (nrow(dc_row) == 1) {
