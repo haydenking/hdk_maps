@@ -508,15 +508,12 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
            !is.na(Value),
            !is.na(name))
   
-  # Taking out DC because people complained
+  # Taking out DC because people complained and PR because people will complain
   if(level == "state"){
     inset_data <- inset_data |>
-      filter(fips != "11") 
+      filter(!fips %in% c("11", "72"))  
   }
-  # if(level == "county"){
-  #   inset_data <- inset_data |>
-  #     filter(fips != "11001")
-  # }
+
   if(logratio){
     inset_data <- inset_data |>
       mutate(Value = exp(Value))
@@ -672,7 +669,7 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
         height = text_height + unit(0.02, "npc"),
         r = unit(0.03, "npc"), #0.1 is the most you can do without the corners bumping into the text but 0.03 looks better
         just = c("left", "bottom"),
-        gp = gpar(fill = midpoint_rgb(palette$mid_color, palette$high_color, 0.7), col = palette$text_color, lwd = 2)
+        gp = gpar(fill = midpoint_rgb(palette$mid_color, palette$high_color, 0.7), col = palette$text_color, lwd = 3)
       ))
   }
     plot = plot +
@@ -703,7 +700,7 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
   #didn't try very hard to make it work but it seems this kinda might not work if I put it in choropleth_map idk why
   if (!bubbles & level != "freefloating") {
     plot <- plot +
-      theme(legend.key = element_rect(fill = NA, color = "black",  linewidth = 0.5))#changed from linewidth to size due to deprecation
+      theme(legend.key = element_rect(fill = NA, color = "black",  linewidth = 1.75))#changed from linewidth to size due to deprecation
   }
   
   return(plot)
@@ -779,7 +776,7 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
       )
   } else if(level == "freefloating"){
     plot = plot +
-      with_shadow(geom_sf(data = state_map, color = "black", fill = "white", linewidth = 0.1),
+      with_shadow(geom_sf(data = state_map, color = "black", fill = "white", linewidth = 0.5),
                  x_offset = 3, y_offset = 3, sigma = 3, color = "grey70") +
       geom_sf(
         data = map,
@@ -805,7 +802,7 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
     
   if (!is.null(state_map) & level != "freefloating") {
     plot <- plot +
-      geom_sf(data = state_map, color = "black", fill = NA, linewidth = 0.1)
+      geom_sf(data = state_map, color = "black", fill = NA, linewidth = 0.5)
   }
 
   if("Type" %in% data_type) {
@@ -990,7 +987,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
     
     plot = plot + 
       with_shadow(
-        geom_sf(data = state_map, color = "black", fill = "white", linewidth = 0.1),
+        geom_sf(data = state_map, color = "black", fill = "white", linewidth = 0.5),
         x_offset = 3, y_offset = 3, sigma = 3, color = "grey70"
       ) + geom_sf(
         data = map,
@@ -1020,7 +1017,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
   
     if(!is.null(state_map) & level != "freefloating"){
         plot <- plot +
-      geom_sf(data = state_map, color = "black", fill = NA, linewidth = 0.1) #can't seem to make borders bold no matter how high I make the size
+      geom_sf(data = state_map, color = "black", fill = NA, linewidth = if_else(level == "state", 1, 0.5)) #can't seem to make borders bold no matter how high I make the size
     }
   
   if(level == "state"){
@@ -1056,10 +1053,17 @@ add_state_labels <- function(plot, map, palette, dollar, unit){
       #yes this is a mess but it works
   
   adjustments <- tibble( #these adjustments are needed for labels but aren't good bubble locations
-  abbr = c("NH", "MA", "CT", "NJ","MD", "RI", "DE", "IN", "VT", "DC"), # Indiana adjustment is just so it doesn't overlap with Illinois for long labels
-  x_adj = c(-5000, 40000, -35000, 10000, 10000, 10000, 0, 0, -20000, 450000),
-  y_adj = c(110000, 20000, -20000, -10000, -30000, 10000, 0, 35000, 30000, -350000)
+  abbr = c("NH", "MA", "CT", "NJ","MD", "RI", "DE", "IN", "VT", "DC", "NY", "KY", "LA"), # Indiana adjustment is just so it doesn't overlap with Illinois for long labels
+  x_adj = c(-10000, 70000, -35000, 10000, 25000, 0, 0, 5000, -20000, 460000, 20000, 30000, 0),
+  y_adj = c(120000, -20000, -20000, -10000, -70000, 10000, -10000, 35000, 30000, -350000, 0, -10000, -20000)
 )
+  
+  repels <- tibble(
+    abbr = c("DE", "HI", "PR", "RI", "VT", "NJ", "CT", "NH", "MA", "MD"),
+    x_nudge = c(100, 100, 100, 100, -100, 100, 100, -100, 100, 100),
+    y_nudge = c(-50, -100, -100, -50, 100, -100, -50, 100, 100, -100),
+    box_padding = c(1, 1, 1, 0.75, 1, 1, 1, 1, 1, 2)
+  )
     if(unit == "%"){
       format_value = append_unit(dollar, unit)
       percent = "%"
@@ -1078,35 +1082,69 @@ map <- map |>
   mutate(label = format_value(Value),
          label = case_when(Value < 0.01 & Value > 0 ~ paste0("<", dollar, "0.01", percent), 
                            Value > -0.01 & Value < 0 ~ paste0(">-", dollar, "0.01", percent), #this will look kind of weird but idk what else to do to avoid signif making super long labels for very small numbers
-                           T ~ label
-                           ))
+                           T ~ label))
+wv = map |> filter(abbr == "WV")
+wv_label_length = nchar(wv$label)
+if(wv_label_length > 4){
+  map <- map|>
+    filter(abbr != "WV")
+  plot <- plot +
+    geom_text(
+        data = wv,
+        aes(x = x, y = y, label = label, color = text_color),
+        size = 4,
+        fontface = "bold",
+        angle = 45
+      )
+}
 
-      plot <- plot + geom_text(data = map %>% filter(!(abbr %in% c( "DC","DE", "RI", "NJ", "HI", "VT", "CT", "MA", "NH", "MD", "PR"))), aes(x = x, y = y, label = label, color = text_color), size = 4, fontface = "bold") +
-        scale_color_identity() +
-  geom_text_repel(data = map %>% filter(abbr %in% c("DE", "HI", "PR")),
-                           aes(x = x, y = y, label = label),
-                           box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100) +
-        geom_text_repel(data = map %>% filter(abbr == "RI"),
-                           aes(x = x, y = y, label = label),
-                           box.padding = 0.75, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -50) +
-        geom_text_repel(data = map %>% filter(abbr == "VT"),
-                           aes(x = x, y = y, label = label),
-                           box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = -100, nudge_y = 100) +
-    geom_text_repel(data = map %>% filter(abbr == "NJ"),
-                           aes(x = x, y = y, label = label),
-                           box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100) +
-        geom_text_repel(data = map %>% filter(abbr == "CT"),
-                           aes(x = x, y = y, label = label),
-                           box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -50) +
-        geom_text_repel(data = map %>% filter(abbr == "NH"),
-                           aes(x = x, y = y, label = label),
-                           box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = -100, nudge_y = 100) +
-        geom_text_repel(data = map %>% filter(abbr == "MA"),
-                           aes(x = x, y = y, label = label),
-                           box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = 100) +
-        geom_text_repel(data = map %>% filter(abbr == "MD"),
-                           aes(x = x, y = y, label = label),
-                           box.padding = 2, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100)
+plot <- plot + 
+      geom_text(data = map %>% filter(!(abbr %in% c("DC", repels$abbr))), 
+         aes(x = x, y = y, label = label, color = text_color), 
+         size = 4, 
+         fontface = "bold") +
+      scale_color_identity()
+
+for (i in 1:nrow(adjustments)) {
+  row <- repels[i, ]
+  
+  plot <- plot +
+    geom_text_repel(
+      data = map %>% filter(abbr == row$abbr),
+      aes(x = x, y = y, label = label),
+      nudge_x = row$x_nudge,
+      nudge_y = row$y_nudge,
+      size = 4,
+      fontface = "bold",
+      color = palette$text_color,
+      box.padding = row$box_padding,
+      segment.size = 0.8) #if I did it all in one call the repels would repel each other which is a huge mess
+}
+
+  # geom_text_repel(data = map %>% filter(abbr %in% c("DE", "HI", "PR")),
+  #                          aes(x = x, y = y, label = label),
+  #                          box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100) +
+  #       geom_text_repel(data = map %>% filter(abbr == "RI"),
+  #                          aes(x = x, y = y, label = label),
+  #                          box.padding = 0.75, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -50) +
+  #       geom_text_repel(data = map %>% filter(abbr == "VT"),
+  #                          aes(x = x, y = y, label = label),
+  #                          box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = -100, nudge_y = 100) +
+  #   geom_text_repel(data = map %>% filter(abbr == "NJ"),
+  #                          aes(x = x, y = y, label = label),
+  #                          box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100) +
+  #       geom_text_repel(data = map %>% filter(abbr == "CT"),
+  #                          aes(x = x, y = y, label = label),
+  #                          box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -50) +
+  #       geom_text_repel(data = map %>% filter(abbr == "NH"),
+  #                          aes(x = x, y = y, label = label),
+  #                          box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = -100, nudge_y = 100) +
+  #       geom_text_repel(data = map %>% filter(abbr == "MA"),
+  #                          aes(x = x, y = y, label = label),
+  #                          box.padding = 1, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = 100) +
+  #       geom_text_repel(data = map %>% filter(abbr == "MD"),
+  #                          aes(x = x, y = y, label = label),
+  #                          box.padding = 2, size = 4, fontface = "bold",color = palette$text_color, nudge_x = 100, nudge_y = -100)
       
 dc_row <- map |> filter(fips == "11", name == "District of Columbia")
   if (nrow(dc_row) == 1) {
@@ -1120,7 +1158,8 @@ dc_row <- map |> filter(fips == "11", name == "District of Columbia")
       size = 4,
       fontface = "bold",
       fill = dc_row$bin_color,
-      color = dc_row$text_color
+      color = dc_row$text_color,
+      label.size = 1 #state border thickness
     )
   }
       
