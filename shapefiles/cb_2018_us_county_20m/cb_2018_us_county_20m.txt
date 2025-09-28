@@ -1,0 +1,1 @@
+This is a shapefile for US counties before Connecticut switched from counties to planning regions.
