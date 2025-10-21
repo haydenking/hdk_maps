@@ -1,0 +1,490 @@
+---
+title: "Construct_Maps"
+format: pdf
+editor: source
+---
+
+This file constructs US map shapefiles for different subdivision levels
+
+##Setup
+
+```{r}
+library(stringr)
+library(tibble)
+library(tidyr)
+library(dplyr)
+library(readxl)
+library(readr)
+library(usmap)
+library(sf)
+library(tigris)
+```
+
+#scale_sfc
+For scaling Puerto Rico
+```{r}
+scale_sfc <- function(sfc, centroid, factor) {
+  lapply(sfc, function(geom) {
+    if (inherits(geom, "POLYGON")) {
+      # Polygon: list of rings
+      new_rings <- lapply(geom, function(ring) {
+        coords <- ring
+        coords[, 1:2] <- (coords[, 1:2] - matrix(centroid, nrow(coords), 2, byrow = TRUE)) * factor +
+                         matrix(centroid, nrow(coords), 2, byrow = TRUE)
+        coords
+      })
+      st_polygon(new_rings)
+
+    } else if (inherits(geom, "MULTIPOLYGON")) {
+      # Multipolygon: list of polygons, each with list of rings
+      new_polys <- lapply(geom, function(poly) {
+        lapply(poly, function(ring) {
+          coords <- ring
+          coords[, 1:2] <- (coords[, 1:2] - matrix(centroid, nrow(coords), 2, byrow = TRUE)) * factor +
+                           matrix(centroid, nrow(coords), 2, byrow = TRUE)
+          coords
+        })
+      })
+      st_multipolygon(new_polys)
+
+    } else {
+      stop("Unsupported geometry type: ", class(geom)[1])
+    }
+  }) |> st_sfc(crs = st_crs(sfc))
+}
+```
+
+#shift_akhi
+```{r}
+shift_akhi <- function(map) {
+  #crop Aleutians
+  alaska = map |>
+    filter(abbr == "AK")
+  
+  map <- map |>
+    filter(abbr != "AK")
+  
+  bbox <- st_bbox(c(xmin = -170, xmax = -120, ymin = 50, ymax = 72), crs = st_crs(alaska))
+  alaska <- st_crop(alaska, bbox)
+  map = rbind(map, alaska)
+  
+  map <- map |> #tigris built-in function that shifts and rescales AK, HI, PR
+    shift_geometry()
+  
+  #shift AK and HI to the right
+  AKHI_SHIFT = c(250000, 0)
+  akhi = map |> filter(abbr %in% c("AK", "HI"))
+  
+  map = map |> filter(!abbr %in% c("AK", "HI"))
+  
+  st_geometry(akhi) = st_geometry(akhi) + AKHI_SHIFT
+  st_crs(akhi) <- st_crs(map)
+  map = rbind(map, akhi)
+}
+```
+
+#shift_pr
+```{r}
+shift_pr <- function(map) {
+  PUERTO_RICO_SHIFT = c(1250000, 800000)
+  
+  puertorico = map |>
+    filter(abbr == "PR")
+  
+  map <- map |>
+    filter(abbr != "PR")
+  
+  st_geometry(puertorico) = st_geometry(puertorico) + PUERTO_RICO_SHIFT
+  st_crs(puertorico) <- st_crs(map) #CRS gets dropped in the previous line
+  return(list("map" = map, "puertorico" = puertorico))
+}
+```
+
+#construct_state_map
+```{r}
+construct_state_map <- function(large_pr = F) {
+  state_map <- states(resolution = "20m", cb = TRUE, year = 2020) |>
+  rename(fips = GEOID,
+         abbr = STUSPS,
+         name = NAME) |>
+  select(fips, abbr, name)
+
+  state_map = shift_akhi(state_map)
+
+  shifted_pr = shift_pr(state_map)
+  
+  state_map = shifted_pr$map
+  puertorico = shifted_pr$puertorico
+  
+  if(!large_pr){ #by default, tigris::shift_geometry scales up PR, but this isn't necessary if there are no subdivisions
+    puertorico$geometry = scale_sfc(puertorico$geometry, st_coordinates(st_centroid(puertorico)), 0.5)
+    st_crs(puertorico) <- st_crs(state_map) #CRS gets dropped in the previous line
+  } #large_pr = T is used to provide state lines for non-state-level maps
+  
+  state_map = rbind(state_map, puertorico)
+  
+  state_map <- state_map |>
+    mutate(centroid = st_centroid(geometry),
+           x = st_coordinates(centroid)[, 1], # Longitude
+           y = st_coordinates(centroid)[, 2] # Latitude
+           )
+  
+  adjustments <- tibble(
+    abbr = c("CA", "NJ", "MI", "MD", "LA", "FL", "HI", "ID", "WV", "ME", "VA"), #adjust centroids
+    x_adj = c(-40000, 10000,80000, -25000, -0,80000, 130000, 0, -20000, 25000, 30000),
+    y_adj = c(0, 0,-120000, 35000, -40000,0,-100000, -50000, 0, -10000, 0)
+  )
+  
+  state_map <- state_map |>
+    left_join(adjustments, by = "abbr") |>
+    mutate(
+      x = coalesce(x + x_adj, x),
+      y = coalesce(y + y_adj, y)
+    ) |>
+    select(-x_adj, -y_adj)
+  
+  
+  state_pops = read_csv("https://raw.githubusercontent.com/JoshData/historical-state-population-csv/refs/heads/primary/historical_state_population_by_year.csv")
+  
+  colnames(state_pops) = c("abbr", "year", "pop")
+  
+  state_pops <- state_pops |>
+    filter(year > 1999) |> #probably won't need anything earlier
+    mutate(pop_name = paste0("pop",sprintf("%02d", year-2000))) |>
+    select(-year) |>
+    pivot_wider(names_from = pop_name, values_from = pop)
+  
+  state_map = left_join(state_map, state_pops, by = "abbr") |>
+    mutate(pop = pop20)
+  
+  state_areas = read_csv("https://raw.githubusercontent.com/jakevdp/data-USstates/refs/heads/master/state-areas.csv")
+  
+  colnames(state_areas) = c("name", "sqmi")
+  
+  state_map = left_join(state_map, state_areas)
+  
+  return(state_map)
+}
+```
+
+
+#construct_state_map
+```{r}
+#To do: add populations for PR
+construct_county_map <- function(planningregions = F, va_merge = F, ag_districts = F, maui_merge = F) {
+  
+  county_map <- counties(cb = TRUE, resolution = "5m") |>
+    select(ALAND, STUSPS, STATE_NAME, GEOID, NAMELSAD, STATEFP) |>
+    filter(!STUSPS %in% c("GU", "MP", "VI", "AS"))
+  if(!planningregions){
+    county_map <- county_map |>
+      filter(!STATEFP == "09") #remove ct
+    ct = counties(cb = TRUE, resolution = "5m", year = 2019)|>
+      filter(STATEFP == "09") |>
+      mutate(STUSPS = "CT",
+             STATE_NAME = "Connecticut",
+             NAMELSAD = paste0(NAME, " County")) |> #for some reason the 2019 file has some columns missing
+      select(ALAND, STUSPS, STATE_NAME, GEOID, NAMELSAD, STATEFP)
+    county_map = rbind(county_map, ct)
+  }
+  
+  county_map <- county_map |>
+      mutate(
+        sqmi = ALAND*3.86102e-7, #square meters to square miles
+        abbr = STUSPS,
+        state = STATE_NAME,
+        fips = GEOID,
+        county = NAMELSAD
+      )
+  
+  county_map = shift_akhi(county_map)
+  
+  shifted_pr = shift_pr(county_map)
+    
+  county_map = shifted_pr$map
+  puertorico = shifted_pr$puertorico
+    
+  county_map = rbind(county_map, puertorico)
+  
+    county_map <- county_map |>
+      mutate(county = if_else(STATEFP == "11", "Washington", county),
+             abbr   = if_else(STATEFP == "11", "DC", abbr),
+             state  = if_else(STATEFP == "11", "District of Columbia", state))
+  
+  county_map <- county_map |>
+      select(fips, county, abbr, sqmi, state)
+    
+  #using this source for 2020 pops because the easier to find census bureau estimates use planning regions for CT
+    county_pops20 = read_delim(paste0("https://www2.census.gov/geo/docs/reference/cenpop2020/county/CenPop2020_Mean_CO.txt"), delim = ",") |>
+      mutate(fips = paste0(STATEFP, COUNTYFP)) |>
+      rename(pop = POPULATION) |>
+      select(fips, pop)
+    
+    county_map = left_join(county_map, county_pops20) 
+    
+  #historical county pops from here: https://www.census.gov/data/datasets/time-series/demo/popest/2010s-counties-total.html
+    #2010-2019 pops
+  county_pops1019 = read_xlsx("county_pops10-19.xlsx") |>
+    mutate(county = str_remove(county, "^\\."),
+           county =str_split(county, ", ")) |>
+    unnest_wider(county, names_sep = "_") |>
+    rename(county = county_1,
+           state = county_2)
+  
+  county_map = left_join(county_map, county_pops1019, by = c("county", "state"))
+  
+  #2020-2023 pops from here: https://www.census.gov/data/tables/time-series/demo/popest/2020s-counties-total.html
+  #these data use CT planning regions :/
+    #maybe read this directly from the internet for easy updating?
+  county_pops_recent = read_xlsx("county_pops20-23.xlsx") |>
+    mutate(county = str_remove(county, "^\\."),
+           county =str_split(county, ", ")) |>
+    unnest_wider(county, names_sep = "_") |>
+    rename(county = county_1,
+           state = county_2)
+  
+  county_map = left_join(county_map, county_pops_recent, by = c("county", "state"))
+  
+    county_map <- county_map |>
+        mutate(county = str_replace(county, "city", "City"), #for independent cities
+               pop20 = if_else(is.na(pop20), pop, pop20)) #pop is pop20, but this fixes it for CT counties
+  
+  #This section is for county_map_ag (USDA data) because this creates Ag Districts for Alaska and Merges Maui and Kalawao Counties in HI
+    if(ag_districts){
+    agdistricts_ak = read_csv(paste0(paste0(wd, "Data/USDA/agdistricts_ak.csv"))) |>
+      select(-fips)
+  
+  county_map <- county_map |> #we don't really need historical populations for ag maps
+     select(fips, county, abbr, state, sqmi, pop)
+  
+  county_map_ak = county_map |>
+      filter(abbr == "AK") |>
+      mutate(county = str_remove(county, " Census Area"),
+           county = str_remove(county, " and Borough"),
+           county = str_remove(county, " Borough"),
+           county = str_remove(county, " Municipality"),
+           county = str_remove(county, " City"),
+           agdistrict = case_when(county %in% c("Kenai Peninsula") ~ "Kenai Peninsula",
+                                    county %in% c("Anchorage", "Matanuska-Susitna", "Chugach", "Copper River") ~ "Matanuska-Susitna-Anchorage",
+                                    county %in% c("Juneau", "Ketchikan Gateway", "Sitka", "Yakutat", "Haines", "Prince of Wales-Hyder", "Skagway", "Wrangell", "Petersburg", "Hoonah-Angoon") ~ "Southeast",
+                                    county %in% c("Aleutians East", "Aleutians West", "Lake and Peninsula", "Kodiak Island", "Bristol Bay", "Dillingham", "Bethel", "Nome", "Northwest Arctic", "North Slope", "Kusilvak") ~ "Southwest & West",
+                                    county %in% c("Fairbanks North Star", "Denali", "Southeast Fairbanks", "Yukon-Koyukuk") ~ "Tanana Valley"))
+  
+  county_map_ak = county_map_ak |>
+    left_join(agdistricts_ak, by = "agdistrict")
+  
+  county_map_ak <- county_map_ak |>
+    mutate(fips = case_when(county == main_county ~ fips,
+                            county == "Aleutians East" ~ "02010", #"Aleutian Islands" doesn't have a fips code but this is what USDA uses for this ag district
+                            T ~ NA),
+           county = paste0(agdistrict , " Ag District")) |>
+    group_by(agdistrict) |>
+    mutate(fips = na.omit(fips)) |>
+    group_by(fips, county) |> #grouping by fips and county is just so they don't get dropped
+    summarize(geometry = st_union(geometry),
+                sqmi = sum(sqmi),
+                pop = sum(pop)) |>
+    mutate(abbr = "AK",
+           state = "Alaska")
+  
+  county_map <- county_map |>
+    filter(abbr != "AK")
+  
+  county_map = rbind(county_map, county_map_ak)
+  
+    }
+  
+  if(va_merge){ #This merge is used in Bureau of Economic Analysis data
+    #va_merges.csv was constructed from a BEA dataset
+    # va_merges = industries_county |> 
+    # filter(str_detect(GeoName, ", VA\\*"),
+    #        GeoName != "Bedford, VA*") |> #it's just one county no need to merge
+    # mutate(
+    #   GeoName = str_remove(GeoName, "\\*"),
+    #   merged_names = str_remove(GeoName, ", VA\\*")
+    # ) |> rename(GeoFIPS = fips) |>
+    # select(GeoFIPS, GeoName) |>
+    # distinct()
+    
+    va_merges = read.csv("va_merges.csv") |>
+      mutate(components = str_split(GeoName, "\\s*(\\+|,)\\s*"))  # split on comma or plus, with optional whitespace
+  
+  va_unmerged = county_map |>
+    filter(abbr == "VA") |>
+    mutate(county = str_remove(county, "County"),
+           county = if_else(county %in% c("Fairfax City", "James City "), county, str_remove(county, "City")),
+          county = str_trim(county)) |>
+    st_drop_geometry()
+  
+  va_key <- va_merges |>
+    filter(!is.na(fips)) |>
+    unnest(components) |>
+    rename(county = components) |>
+    left_join(va_unmerged, by = "county") |>
+    select(fips, GeoFIPS) |>
+    filter(!is.na(fips),
+           fips != "51067") #Make sure Franklin County doesn't get merged into Franklin (city) + Southampton
+  
+  va_merged_geoms <- county_map |>
+    filter(fips %in% va_key$fips) |>
+    left_join(va_key, by = "fips") |>
+    group_by(GeoFIPS) |>
+    summarize(
+      across(contains("pop"), sum),
+      sqmi = sum(sqmi),
+      geometry = st_union(geometry)
+    ) |>
+    ungroup() |>
+    mutate(abbr = "VA",
+      state = "Virginia") |>
+    left_join(va_merges |> select(-components), by = "GeoFIPS") |>
+    mutate(
+      county = str_remove(GeoName, ", VA\\*")
+    ) |>
+    rename(fips = GeoFIPS) |>
+    select(-GeoName)
+  
+  county_map = county_map |>
+    filter(!fips %in% va_key$fips) |>
+    rbind(va_merged_geoms)
+  }
+    
+  if(maui_merge) {
+    maui = county_map |>
+    filter(county %in% c("Maui County", "Kalawao County")) |>
+    summarize(
+      across(contains("pop"), sum),
+      sqmi = sum(sqmi),
+      geometry = st_union(geometry)
+    ) |>
+    mutate(county = "Maui and Kalawao Counties",
+           fips = "15901",
+           abbr = "HI",
+           state = "Hawaii")
+  
+  county_map = county_map |>
+    filter(!county %in% c("Maui County", "Kalawao County")) |>
+    rbind(maui)
+    
+  }
+  
+  coords <- st_coordinates(st_centroid(county_map))
+  county_map <- county_map |>
+    mutate(x = coords[, 1],
+           y = coords[, 2],
+           x = if_else(county == "Kenai Peninsula Ag District", x+40000, x), #fix Alaska ag district centroids
+           y = if_else(county == "Southwest & West Ag District", y-210000, y),
+           x = if_else(county == "Southeast Ag District", x - 50000, x),
+           y = if_else(county == "Southeast Ag District", y +50000, y),
+           name = paste0(county, ", ", abbr))
+  
+  return(county_map)
+}
+```
+
+#construct_puma_map
+Public Use Microdata Areas!
+```{r}
+url <- "https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_puma20_500k.zip"
+
+tmp <- tempfile(fileext = ".zip")
+download.file(url, tmp)
+unzip(tmp, exdir = tempdir())
+
+construct_puma_map <- function(){
+  puma_map <- st_read(file.path(tempdir(), "cb_2020_us_puma20_500k.shp"))
+  
+  puma_map <- puma_map |>
+    filter(STATEFP20 != "66") |> #remove guam
+    rename(fips = GEOID20,
+           abbr = STUSPS20) |> 
+    mutate(
+      puma = sapply(NAMELSAD20, shorten_puma_name),
+      name = paste0(puma, ", ", abbr)) 
+  
+    puma_map = shift_akhi(puma_map)
+    
+    shifted_pr = shift_pr(puma_map)
+      
+    puma_map = shifted_pr$map
+    puertorico = shifted_pr$puertorico
+      
+    puma_map = rbind(puma_map, puertorico)
+  
+  puma_map <- puma_map |>
+    select(puma, name, abbr, fips)
+  
+  return(puma_map)
+}
+
+#not perfect - leaves some ambiguous ones like "Coastal Region", but for the ones that have ended up in insets so far it has been good
+shorten_puma_name <- function(name) {
+  name <- sub(" PUMA", "", name)
+  parts <- strsplit(name, "--")[[1]]
+  parts <- trimws(parts)
+  
+  # drop regional commission prefix
+  if (grepl("Regional Commission", parts[1], ignore.case = TRUE)) {
+    parts <- parts[-1]
+  }
+  
+  # if 3+ parts, prefer the last (most local)
+  if (length(parts) >= 3) {
+    base <- parts[length(parts)]
+  } else if (length(parts) == 2) {
+    base <- parts[2]
+  } else {
+    base <- parts[1]
+  }
+  
+  # remove "City of" at start
+  base <- sub("^City of\\s+", "", base, ignore.case = TRUE)
+  
+  # remove City/Cities unless followed by County/Parish/Borough
+  base <- gsub("\\bCities\\b(?!\\s*(County|Parish|Borough))", "", base,
+               perl = TRUE, ignore.case = TRUE)
+  base <- gsub("\\bCity\\b(?!\\s*(County|Parish|Borough))", "", base,
+               perl = TRUE, ignore.case = TRUE)
+  
+  # clean spaces
+  base <- gsub("\\s{2,}", " ", base)
+  base <- gsub("\\s+,", ",", base)
+  base <- gsub("\\s+&", " &", base)
+  
+  return(trimws(base))
+}
+```
+
+
+
+Read in and Save maps
+```{r}
+  # county_map = construct_county_map()
+  # st_write(county_map, "shapefiles/county_map/county_map.shp", delete_dsn = T)
+  county_map = st_read("shapefiles/county_map/county_map.shp")
+
+  # county_map_ag = construct_county_map(ag_districts = T, maui_merge = T)
+  # st_write(county_map_ag, "shapefiles/county_map_ag/county_map_ag.shp", delete_dsn = T)
+  county_map_ag = st_read("shapefiles/county_map_ag/county_map_ag.shp")
+
+  # county_map_planningregions = construct_county_map(planningregions = T)
+  # st_write(county_map_planningregions, "shapefiles/county_map_planningregions/county_map_planningregions.shp", delete_dsn = T)
+  county_map_planningregions = st_read( "shapefiles/county_map_planningregions/county_map_planningregions.shp")
+  
+  # puma_map = construct_puma_map()
+  # st_write(puma_map, "shapefiles/puma_map/puma_map.shp", delete_dsn = T)
+  puma_map = st_read("shapefiles/puma_map/puma_map.shp")
+  
+  # state_map = construct_state_map(large_pr = F)
+  # st_write(state_map, "shapefiles/state_map/state_map.shp", delete_dsn = T)
+  state_map = st_read("shapefiles/state_map/state_map.shp")
+  
+  # state_map_largepr = construct_state_map(large_pr = T)
+  # st_write(state_map_largepr, "shapefiles/state_map_largepr/state_map_largepr.shp", delete_dsn = T)
+  state_map_largepr = st_read("shapefiles/state_map_largepr/state_map_largepr.shp")
+  
+  #haven't updated MSA map in a while and don't like using it so omitting it here
+  # MSA_map = st_read("shapefiles/MSA_map/MSA_map.shp")
+  # MSAs = read_csv("MSAs_crosswalk.csv")
+```
+

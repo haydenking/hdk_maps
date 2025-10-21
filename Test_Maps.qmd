@@ -1,0 +1,106 @@
+---
+title: "Test_Maps"
+format: pdf
+editor: source
+---
+
+This file is for testing the mapping function found in MappingFunction.qmd using the map shapefiles constructed in Construct_Maps.qmd.
+
+#sample_data
+```{r}
+sample_data <- function(map) {
+  sample_data = map |>
+    st_drop_geometry() |>
+    mutate(Value = runif(n = nrow(map))) |>
+    select(Value, fips)
+  return(sample_data)
+}
+```
+
+
+#County Maps
+
+```{r}
+county_sample_data = sample_data(county_map)
+
+map(data = county_sample_data,
+  state_map = state_map_largepr,
+  map = county_map,
+  bubbles = F,
+  title = "County Map Test",
+  unit = "%",
+  source = "",
+  caption_manual = "Test caption"
+)
+
+map(data = county_sample_data,
+  state_map = state_map_largepr,
+  map = county_map,
+  bubbles = F,
+  continental = T,
+  title = "County Map Test (Continental)",
+  unit = "%",
+  source = "",
+  caption_manual = "Test caption"
+)
+```
+
+
+#State Maps
+
+```{r}
+state_sample_data = sample_data(state_map)
+
+map(data = state_sample_data,
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = "State Map Test",
+  unit = "%",
+  source = "",
+  caption_manual = "Test caption"
+)
+
+map(data = state_sample_data,
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  continental = T,
+  title = "State Map Test (Continental)",
+  unit = "%",
+  source = "",
+  caption_manual = "Test caption"
+)
+```
+
+
+#PUMA Map
+
+```{r}
+puma_sample_data = sample_data(puma_map)
+
+map(data = puma_sample_data,
+  state_map = state_map_largepr,
+  map = puma_map,
+  bubbles = F,
+  title = "PUMA Map Test",
+  unit = "%",
+  source = "",
+  caption_manual = "Test caption"
+)
+```
+
+
+#MSA Map
+
+```{r}
+#might do later
+```
+
+
+#ZIP Map
+
+```{r}
+#will do later
+```
+
