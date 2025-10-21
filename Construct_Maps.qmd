@@ -102,12 +102,14 @@ shift_pr <- function(map) {
 
 #construct_state_map
 ```{r}
-construct_state_map <- function(large_pr = F) {
-  state_map <- states(resolution = "20m", cb = TRUE, year = 2020) |>
-  rename(fips = GEOID,
-         abbr = STUSPS,
-         name = NAME) |>
-  select(fips, abbr, name)
+construct_state_map <- function(state_maps = T) {
+  #5m resolution for non-state-level maps so that it matches the other map
+  state_map <- states(resolution = if_else(state_maps, "20m", "5m"), cb = TRUE, year = 2020) |>
+    rename(fips = GEOID,
+           abbr = STUSPS,
+           name = NAME) |>
+    filter(!abbr %in% c("GU", "MP", "VI", "AS")) |>
+    select(fips, abbr, name)
 
   state_map = shift_akhi(state_map)
 
@@ -116,10 +118,10 @@ construct_state_map <- function(large_pr = F) {
   state_map = shifted_pr$map
   puertorico = shifted_pr$puertorico
   
-  if(!large_pr){ #by default, tigris::shift_geometry scales up PR, but this isn't necessary if there are no subdivisions
+  if(state_maps){ #by default, tigris::shift_geometry scales up PR, but this isn't necessary if there are no subdivisions
     puertorico$geometry = scale_sfc(puertorico$geometry, st_coordinates(st_centroid(puertorico)), 0.5)
     st_crs(puertorico) <- st_crs(state_map) #CRS gets dropped in the previous line
-  } #large_pr = T is used to provide state lines for non-state-level maps
+  }
   
   state_map = rbind(state_map, puertorico)
   
@@ -168,7 +170,7 @@ construct_state_map <- function(large_pr = F) {
 ```
 
 
-#construct_state_map
+#construct_county_map
 ```{r}
 #To do: add populations for PR
 construct_county_map <- function(planningregions = F, va_merge = F, ag_districts = F, maui_merge = F) {
@@ -382,6 +384,7 @@ construct_county_map <- function(planningregions = F, va_merge = F, ag_districts
 }
 ```
 
+
 #construct_puma_map
 Public Use Microdata Areas!
 ```{r}
@@ -397,7 +400,8 @@ construct_puma_map <- function(){
   puma_map <- puma_map |>
     filter(STATEFP20 != "66") |> #remove guam
     rename(fips = GEOID20,
-           abbr = STUSPS20) |> 
+           abbr = STUSPS20) |>
+    filter(!abbr %in% c("GU", "MP", "VI", "AS")) |>
     mutate(
       puma = sapply(NAMELSAD20, shorten_puma_name),
       name = paste0(puma, ", ", abbr)) 
@@ -456,7 +460,6 @@ shorten_puma_name <- function(name) {
 ```
 
 
-
 Read in and Save maps
 ```{r}
   # county_map = construct_county_map()
@@ -475,11 +478,11 @@ Read in and Save maps
   # st_write(puma_map, "shapefiles/puma_map/puma_map.shp", delete_dsn = T)
   puma_map = st_read("shapefiles/puma_map/puma_map.shp")
   
-  # state_map = construct_state_map(large_pr = F)
+  # state_map = construct_state_map(state_maps = T)
   # st_write(state_map, "shapefiles/state_map/state_map.shp", delete_dsn = T)
   state_map = st_read("shapefiles/state_map/state_map.shp")
   
-  # state_map_largepr = construct_state_map(large_pr = T)
+  # state_map_largepr = construct_state_map(state_maps = F)
   # st_write(state_map_largepr, "shapefiles/state_map_largepr/state_map_largepr.shp", delete_dsn = T)
   state_map_largepr = st_read("shapefiles/state_map_largepr/state_map_largepr.shp")
   
