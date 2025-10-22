@@ -18,7 +18,7 @@ library(showtext)
 library(sysfonts)
 library(glue)
 library(moments) #for skewness and kurtosis functions
-library(ggmapinset)
+library(cowplot) #for ggdraw
 
 # font_add_google(name = "Nunito", family = "nunito") #extra bold looking font for state labels but it didn't work for some reason
 font_add_google(name = "Lekton", family = "lekton")
@@ -499,7 +499,7 @@ detect_data_type <- function(data) {
 set_palette <- function(user_palette) {
   default_palette <- list(
     "high_color" = "red", #forestgreen
-    "mid_color" = "#FFE5B4",  # #ECE4D5 #e0df9b #ffda9a
+    "mid_color" = "#FFE5B4",  # #FFE5B4 #ECE4D5 #ffda9a
     "low_color" = "blue", #  #CC5500
     "background_color" = "#E8DACC",# #f1e0cf
     "title_color" = "#363c45",
@@ -604,7 +604,7 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
 
   font = "Arial"
 
-  title_height = 1.06 #I have more vertical space now
+  title_height = 1.04
 
   if(is.na(font_size)){
     font_size = min(36*38/nchar(title), 36) #the plot is a bit more than 40 characters wide at font size 36, but at font size 36 I'd still want some breathing room so 36 characters is when I start reducing the font size (depends on the font you're using)
@@ -613,7 +613,7 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
   }
   
   negative_margin = -10
-  relative_negative_margin = 0.013 #how far in the edge moves from the negative margin on the side (symmetrical)
+  relative_negative_margin = 0.012 #how far in the edge moves from the negative margin on the side (symmetrical)
   
   title_alignment = 0.5 #negative margin is equal on each side so title is centered
   subtitle_offset = 0.07*(font_size/36) # Vertical adjustment for subtitle
@@ -622,14 +622,9 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
 
   # For inset box
   inset_font_size = 11.5
-  text_width <- grobWidth(textGrob(inset_text, gp = gpar(fontsize = inset_font_size))) * 1.05 # Estimate text size
-  text_height <- grobHeight(textGrob(inset_text, gp = gpar(fontsize = inset_font_size)))
 
   #use v_adj when freefloating map has messed up alignment to get caption and inset back to where they should be
-  y_pos <- unit(-0.23 - continental_offset + v_adj, "npc") #bottom of panel, used for caption and inset
-  
-  #for right-aligned inset
-  # x_pos <- unit(if_else(level == "state", 0.57, 0.50), "npc") #for non-right-aligned inset
+  y_pos <- unit(-0.258 - continental_offset + v_adj, "npc") #bottom of panel, used for caption and inset
   x_box <- unit(0.99 - relative_negative_margin, "npc") #right edge of inset box
 
 
@@ -640,7 +635,7 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
       legend.text = element_text(size = 14, color = palette$text_color, face = "bold"),
       legend.position = "inside",
       legend.position.inside = c(relative_negative_margin, -0.02),
-      legend.justification = "left",
+      legend.justification = c("left", "top"),
       legend.direction = "horizontal",
       legend.key.width = unit(if_else(bubbles, min(sqrt(max_bubble_size)/4, 0.75), 0.5), "cm"),
       legend.key.height = unit(0.5, "cm"),
@@ -650,8 +645,8 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
       axis.title = element_blank(),
       axis.text = element_blank(),
       axis.ticks = element_blank(),
-      legend.box.margin = margin(0, 0, 0, 0),
-      plot.margin = margin(if_else(continental, -110, -50), negative_margin, 0, negative_margin)
+      legend.box.margin = margin(0, 0, 60, 0), #might need to adjust top margin
+      plot.margin = margin(if_else(continental, -140, -80), negative_margin, 0, negative_margin)
     ) +
     annotation_custom(textGrob(
       title,
@@ -680,37 +675,87 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
       hjust = 0,
       vjust = 0
     ))
-  if(inset_box & inset_text != "") {
-        plot = plot +
-    annotation_custom(
-      roundrectGrob(
-        x = x_box, #for right-aligned inset
-        y = y_pos,
-        # x =  x_pos - unit(0.01, "npc"),
-        # y = y_pos - unit(0.01, "npc"),
-        width = text_width + unit(0.02, "npc"),
-        height = text_height + unit(0.02, "npc"),
-        r = unit(0.03, "npc"), #0.1 is the most you can do without the corners bumping into the text but 0.03 looks better
-        # just = c("left", "bottom"),
-        just = c("right", "bottom"),
-        gp = gpar(fill = midpoint_rgb(palette$mid_color, palette$high_color, 0.7), col = palette$text_color, lwd = 3)
-      ))
-  }
-    plot = plot +
-    annotation_custom(
-    textGrob(
+  
+  # x_pos <- unit(if_else((level == "state" & !continental), 0.5, 0.32), "npc") #for non-right-aligned inset
+  #left-aligned inset
+  # if(inset_box & inset_text != "") {
+  #       plot = plot +
+  #   annotation_custom(
+  #     roundrectGrob(
+  #       x =  x_pos - unit(0.01, "npc"),
+  #       y = y_pos - unit(0.01, "npc"),
+  #       width = text_width + unit(0.02, "npc"),
+  #       height = text_height + unit(0.02, "npc"),
+  #       r = unit(0.03, "npc"), #0.1 is the most you can do without the corners bumping into the text but 0.03 looks better
+  #       just = c("left", "bottom"),
+  #       gp = gpar(fill = midpoint_rgb(palette$mid_color, palette$high_color, 0.7), col = palette$text_color, lwd = 3)
+  #     ))
+  # }
+  #   plot = plot +
+  #   annotation_custom(
+  #   textGrob(
+  #     inset_text,
+  #     x = x_pos,
+  #     y = y_pos,
+  #     just = c("left", "bottom"),
+  #     gp = gpar(
+  #       fontsize = inset_font_size,
+  #       fontface = "bold",
+  #       col = palette$text_color,
+  #       fontfamily = font)
+  #     ))
+  
+    tg <- textGrob(
       inset_text,
-      x = x_box - text_width + unit(0.01, "npc"),
-      y = y_pos + unit(0.01, "npc"),
-      # x = x_pos,
-      # y = y_pos,
-      just = c("left", "bottom"),
       gp = gpar(
         fontsize = inset_font_size,
         fontface = "bold",
-        col = palette$text_color,
-        fontfamily = font)
-      ))
+        fontfamily = font
+      )
+    )
+    text_width  <- grobWidth(tg)
+    text_height <- grobHeight(tg)
+  
+    padding <- unit(0.3, "cm")
+  
+    box_width  <- text_width + 2 * padding
+    box_height <- text_height + 2 * padding
+  
+    box_x <- x_box - box_width / 2
+  
+  if (inset_box & inset_text != "") {
+  plot <- plot +
+    annotation_custom(
+      roundrectGrob(
+        x = box_x,
+        y = y_pos,
+        width = box_width,
+        height = box_height,
+        r = unit(0.03, "npc"),
+        just = c("center", "bottom"),
+        gp = gpar(
+          fill = midpoint_rgb(palette$mid_color, palette$high_color, 0.7),
+          col = palette$text_color,
+          lwd = 3
+        )
+      )
+    )
+  }
+    plot = plot +
+      annotation_custom(
+        textGrob(
+          inset_text,
+          x = x_box - box_width + padding,
+          y = y_pos + padding,
+          just = c("left", "bottom"),
+          gp = gpar(
+            fontsize = inset_font_size,
+            fontface = "bold",
+            col = palette$text_color,
+            fontfamily = font
+          )
+        )
+      )
 
   if (!is.na(subtitle)) {
     plot <- plot +
@@ -1011,7 +1056,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
         na.translate = TRUE,
         labels = c(formatted_labels, na_label)
       ) + guides(color = guide_legend(override.aes = list(size = 10),
-                                      nrow = ceiling(length(breaks) / 3)))
+                                      ncol = ceiling((length(breaks) - 1) / 6)))
   } else {
     plot = plot + 
       with_shadow(
@@ -1023,7 +1068,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
         na.value = palette$na_color,
         na.translate = TRUE,
         labels = c(formatted_labels, na_label)
-      ) + guides(fill = guide_legend(nrow = ceiling(length(breaks) / 3)))
+      ) + guides(fill = guide_legend(ncol = ceiling((length(breaks) - 1) / 6))) #at most 6 rows in the legend
     }
   
   
@@ -1156,7 +1201,7 @@ create_map_inset <- function(data_3857, lon, lat, zoom_km, title) {
 
 # Function to build an inset grid for a set of cities
 build_inset_grid <- function(city_tbl, map_3857, palette, graphics_params, level, idx) {
-  inset_list <- purrr::pmap(
+  inset_list <- pmap(
     city_tbl,
     ~create_map_inset(map_3857, lon = ..2, lat = ..3, zoom_km = ..4, title = ..1)
   )
@@ -1182,7 +1227,7 @@ build_inset_grid <- function(city_tbl, map_3857, palette, graphics_params, level
 }
 
 # Now loop over your city sets and build all grids
-filepaths <- purrr::imap(city_sets, ~build_inset_grid(.x, map_3857, palette, graphicsparams, level, .y))
+filepaths <- imap(city_sets, ~build_inset_grid(.x, map_3857, palette, graphicsparams, level, .y))
   }
   
   return(list(plot = plot, breaks = breaks))
@@ -1204,9 +1249,9 @@ add_state_labels <- function(plot, map, palette, dollar, unit){
   
   repels <- tibble(
     abbr = c("DE", "HI", "PR", "RI", "VT", "NJ", "CT", "NH", "MA", "MD"),
-    x_nudge = c(100, 100, 100, 100, -100, 100, 100, -100, 100, 100),
+    x_nudge = c(100, -50, 100, 100, -100, 100, 100, -100, 100, 100),
     y_nudge = c(-50, -100, -100, -50, 100, -100, -50, 100, 100, -100),
-    padding = c(1, 1, 1, 0.75, 1, 1, 1, 1, 1, 2)
+    padding = c(1, 1.25, 1, 0.75, 1, 1, 1, 1, 1, 2)
   )
   
 #   adjustments <- tibble( #these adjustments are needed for labels but aren't good bubble locations

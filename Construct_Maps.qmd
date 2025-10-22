@@ -67,19 +67,32 @@ shift_akhi <- function(map) {
   bbox <- st_bbox(c(xmin = -170, xmax = -120, ymin = 50, ymax = 72), crs = st_crs(alaska))
   alaska <- st_crop(alaska, bbox)
   map = rbind(map, alaska)
-  
+
   map <- map |> #tigris built-in function that shifts and rescales AK, HI, PR
     shift_geometry()
   
-  #shift AK and HI to the right
-  AKHI_SHIFT = c(250000, 0)
-  akhi = map |> filter(abbr %in% c("AK", "HI"))
+  alaska = map |>
+    filter(abbr == "AK")
+  
+  hawaii = map |>
+    filter(abbr == "HI")
   
   map = map |> filter(!abbr %in% c("AK", "HI"))
   
-  st_geometry(akhi) = st_geometry(akhi) + AKHI_SHIFT
-  st_crs(akhi) <- st_crs(map)
-  map = rbind(map, akhi)
+  #shift AK and HI
+  AK_SHIFT = c(230000, 0)
+  HI_SHIFT = c(0, 250000)
+  
+  st_geometry(alaska) = st_geometry(alaska) + AK_SHIFT
+  st_geometry(hawaii) = st_geometry(hawaii) + HI_SHIFT
+  
+  st_crs(alaska) <- st_crs(map)
+  st_crs(hawaii) <- st_crs(map)
+  
+  map = rbind(map, alaska)
+  map = rbind(map, hawaii)
+  
+  return(map)
 }
 ```
 

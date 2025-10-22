@@ -30,7 +30,8 @@ map(data = county_sample_data,
   title = "County Map Test",
   unit = "%",
   source = "",
-  caption_manual = "Test caption"
+  caption_manual = "Test caption",
+  inset_style = "split"
 )
 
 map(data = county_sample_data,
@@ -41,7 +42,8 @@ map(data = county_sample_data,
   title = "County Map Test (Continental)",
   unit = "%",
   source = "",
-  caption_manual = "Test caption"
+  caption_manual = "Test caption",
+  inset_style = "split"
 )
 ```
 
@@ -58,7 +60,8 @@ map(data = state_sample_data,
   title = "State Map Test",
   unit = "%",
   source = "",
-  caption_manual = "Test caption"
+  caption_manual = "Test caption",
+  inset_style = "split"
 )
 
 map(data = state_sample_data,
@@ -69,7 +72,8 @@ map(data = state_sample_data,
   title = "State Map Test (Continental)",
   unit = "%",
   source = "",
-  caption_manual = "Test caption"
+  caption_manual = "Test caption",
+  inset_style = "split"
 )
 ```
 
@@ -86,7 +90,8 @@ map(data = puma_sample_data,
   title = "PUMA Map Test",
   unit = "%",
   source = "",
-  caption_manual = "Test caption"
+  caption_manual = "Test caption",
+  inset_style = "split"
 )
 ```
 
