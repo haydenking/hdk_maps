@@ -87,8 +87,9 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
     unit = ":1"
   }
   
-caption = make_caption(source, years, caption_manual)
+caption = make_caption(source, years, caption_manual) #might want to overhaul how this works
   
+#considering removing this, I could just handle before passing the data into the mapping function
   if (per == "capita" & length(years) > 1 | per == "year") {
     num_years_ct = length(years[years < 2022]) #we don't have post-2021 data for CT due to the switch to planning regions, but I should write this better for post-2021 maps, but that is difficult without requiring that the data argument be un-aggregated by year
     num_years_notct = length(years)
@@ -201,31 +202,35 @@ caption = make_caption(source, years, caption_manual)
     inset_text = paste0(top, "\n",bottom)
     }
   }
-  drop_cols = c("GU", "VI", "AS", "MP")
-  
-  pr = map |> filter(substr(fips, 1, 2) == "72")
-  if(all(is.na(pr$Value))) {
-    drops_cols = c(drop_cols, "PR")
+  drop_regions = c("GU", "VI", "AS", "MP")
+  if(abbr %in% colnames(map)) {
+    pr = map |> filter(substr(fips, 1, 2) == "72")
+  } else {
+    pr = map |> filter(abbr == "PR")
   }
   
-  #THIS WILL CRASH ZIP MAP UNTIL FIXED (no abbr column)
-    if (continental) { #filter out AK, HI, and PR after inset
-      if("abbr" %in% colnames(map)) {
-        drop_cols = c(drop_cols, "AK", "HI", "PR")
-      } else{
-        for(abbr in drop_cols){
-          map <- map |>
-            filter(!str_detect(name, paste0(", ", abbr, "$")))
-        }
+  if(all(is.na(pr$Value))) {
+    drops_regions = c(drop_regions, "PR")
+  }
+
+  if (continental) { #filter out AK, HI, and PR after inset
+    if("abbr" %in% colnames(map)) {
+      drop_regions = c(drop_regions, "AK", "HI", "PR")
+    } else{
+      for(abbr in drop_regions){
+        #this won't work for ZIP-level maps
+        map <- map |>
+          filter(!str_detect(name, paste0(", ", abbr, "$")))
       }
+    }
   state_map <- state_map |>
     filter(!abbr %in% c("AK", "HI", "PR"))
+    }
+  if("abbr" %in% colnames(map)){
+  map <- map |>
+    filter(!abbr %in% drop_regions) 
   }
   
-  if("abbr" %in% colnames(map)){
-    map <- map |>
-      filter(!abbr %in% drop_cols) 
-  } 
   map <- map |>
     filter(!st_is_empty(geometry))
   
@@ -625,7 +630,8 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
 
   #use v_adj when freefloating map has messed up alignment to get caption and inset back to where they should be
   y_pos <- unit(-0.258 - continental_offset + v_adj, "npc") #bottom of panel, used for caption and inset
-  x_box <- unit(0.99 - relative_negative_margin, "npc") #right edge of inset box
+  x_box <- unit(if_else(level == "puma", 0.99, 0.8) - relative_negative_margin, "npc") #right edge of inset box
+  #puma level maps need really wide insets
 
 
   plot <- plot +
@@ -1093,7 +1099,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
         text_color = if_else(brightness > 0.5, palette$text_color, "white")
       )
     
-    plot = add_state_labels(plot, map, palette, dollar, unit)
+    plot = add_state_labels(plot, map, palette, dollar, unit, increment)
   }
   
   if (!is.na(region)) {
@@ -1236,7 +1242,8 @@ filepaths <- imap(city_sets, ~build_inset_grid(.x, map_3857, palette, graphicspa
 
 #add_state_labels
 ```{r}
-add_state_labels <- function(plot, map, palette, dollar, unit){
+#doesn't work for Categorical data yet
+add_state_labels <- function(plot, map, palette, dollar, unit, increment){
   font = "Nunito" #not sure if it's working, looks exactly the same as Arial
   font_size = 4 #this is as big as the font can be without indiana and florida running into the borders a significant amount (the bold border don't help)
   
@@ -1269,7 +1276,10 @@ add_state_labels <- function(plot, map, palette, dollar, unit){
 #     padding = c(1, 1, 1.1, 1, 1, 1.75, 1, 2, 1) # for box.padding
 #   ) #MA was 500 50 1.2 but it didn't work once I set expand to F
   
-    if(unit == "%"){
+    if(increment != 0) {
+      format_value = function(x){return(paste0(dollar, x))}
+      percent = ""
+    } else if(unit == "%"){
       format_value = append_unit(dollar, unit)
       percent = "%"
     } else {
@@ -1287,7 +1297,8 @@ map <- map |>
   mutate(label = format_value(Value),
          label = case_when(Value < 0.01 & Value > 0 ~ paste0("<", dollar, "0.01", percent), 
                            Value > -0.01 & Value < 0 ~ paste0(">-", dollar, "0.01", percent), #this will look kind of weird but idk what else to do to avoid signif making super long labels for very small numbers
-                           T ~ label))
+                           T ~ label),
+                  label = gsub("NA", "", label)) #Remove "NA" label
 wv = map |> filter(abbr == "WV")
 wv_label_length = nchar(wv$label)
 if(wv_label_length > 4){
