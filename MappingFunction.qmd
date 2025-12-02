@@ -5,6 +5,7 @@ editor: source
 ---
 ```{r}
 library(dplyr)
+library(purrr)
 library(stringr)
 library(readxl)
 library(scales)
@@ -22,10 +23,10 @@ library(cowplot) #for ggdraw
 
 # font_add_google(name = "Nunito", family = "nunito") #extra bold looking font for state labels but it didn't work for some reason
 font_add_google(name = "Lekton", family = "lekton")
+font_add_google(name = "Noto Sans", family = "notosans")
 showtext_auto()
 #TO DO:
 #map with per capita shading and bubbles/labels for absolute count
-#aggregate county data by state and then use state map options > merge_by_state
 ```
 
 ```{r}
@@ -39,12 +40,57 @@ showtext_auto()
 
 ###map
 ```{r}
-#put error handling in separate function?
-#add good documentation
-#add NYC inset for county-level map (both choropleth and bubble)
-map <- function(data, map, state_map = NULL, title, source, font_size = NA, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, palette = list(), inset_cutoff = -Inf, cutoff_column = "Value", breaks = NA, na_to_0 = F, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T, v_adj = 0, increment = 0, city_insets = F) {
+map <- function(data, map, state_map = NULL, title, source, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, palette = list(), inset_cutoff = -Inf, cutoff_column = "Value", breaks = NA, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T, v_adj = 0, rounding = 0.01, increment = 0, city_insets = F) {
+  
+  #increment = 1 for counts, sometimes 0.1 if all data comes rounded to nearest 0.1
+  #increment changes the formatting of break labels from 1 to 5, 5 to 10 to 1 to 5, 6 to 10
+  
+  #rounding controls which decimal place to round to
   
   palette = set_palette(palette)
+  
+  shorten_func <- function(rounding) {
+
+  decimals <- max(0, -log10(rounding))
+
+  function(value) {
+    sapply(value, function(x) {
+      if (is.na(x)) return("")
+
+      abs_val <- abs(x)
+      thresholds <- c(1e12, 1e9, 1e6, 1e3, 1)
+      suffixes   <- c("t", "b", "m", "k", "")
+
+      for (i in seq_along(thresholds)) {
+        if (abs_val >= thresholds[i]) {
+          scaled <- x / thresholds[i]
+
+          if (decimals > 0) {
+            out <- formatC(scaled, format = "f", digits = decimals, drop0trailing = FALSE)
+          } else {
+            out <- formatC(scaled, format = "f", digits = 0, drop0trailing = TRUE)
+          }
+          return(paste0(out, suffixes[i]))
+        }
+      }
+
+      # values < 1, not covered above
+      if (decimals > 0) {
+        return(formatC(x, format = "f", digits = decimals, drop0trailing = FALSE))
+      } else {
+        return(formatC(x, format = "f", digits = 0, drop0trailing = TRUE))
+      }
+    })
+  }
+}
+  shorten = shorten_func(rounding)
+  
+  append_unit <- function(dollar, unit) {
+  function(x) {
+    sign <- ifelse(x < 0, "-", "")
+    paste0(sign, dollar, shorten(abs(x)), unit)
+  }
+}
   
   #Maps go in map folder, sub-folders named by source
   graphicspath = paste0("Maps/", source, "/")
@@ -74,7 +120,7 @@ map <- function(data, map, state_map = NULL, title, source, font_size = NA, year
   
   if(is.na(scale_center) & "Value" %in% data_type){
     if(min(data$Value, na.rm = T) < 0){
-      cat("Warning: negative Values in data\n")
+      cat("Warning: Negative Values in data\n")
     }
   }
   if("Value" %in% data_type) {
@@ -146,11 +192,6 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
       stop("Only county level can be merged by MSA.")
     }
   }
-  
-  if (na_to_0 & "Value" %in% data_type) {
-    map <- map |>
-      mutate(Value = replace_na(Value, 0))
-  } 
 
   dollar <- ""
   if (str_detect(unit, "\\$")) {
@@ -169,11 +210,11 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
       }
       pop_cols <- paste0("pop", substr(years, 3, 4))
         map <- map %>%
-          mutate(avg_pop = rowMeans(select(., all_of(pop_cols)), na.rm = TRUE)) %>%
+          mutate(avg_pop = rowMeans(st_drop_geometry(select(., all_of(pop_cols))), na.rm = TRUE)) %>%
           mutate(pop = coalesce(avg_pop, pop))
     }
   if("Value" %in% data_type){
-  per_capita_result <- handle_per(map, source, per, subtitle, scale_factor)
+  per_capita_result <- handle_per(map, source, per, subtitle, scale_factor, shorten)
   map <- per_capita_result$map
   subtitle <- per_capita_result$subtitle
   } else {
@@ -189,46 +230,52 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
   } else{ 
     obs_units = case_when(obs_units != "auto" ~ obs_units,
                       level == "county" ~ "Counties",
-                      level == "puma" ~ "PUMAs",
+                      level == "puma" ~ "Public Use Microdata Areas", #Used to just have PUMAs but I have enough space to type it out now
                       level == "MSA" ~ "Counties/MSAs",
                       level == "state" ~ "States",
                       level == "ZIP" ~ "ZIP Codes",
                       T ~ "")
     if (inset_style %in% c("top", "bottom")) {
-    inset_text <- create_inset(map, level, inset_style, 10, inset_cutoff, cutoff_column, logratio, scale_center, hide_values, inset_labels, obs_units, format_value)
+    inset_text <- create_inset(map, level, inset_style, 10, inset_cutoff, cutoff_column, logratio, scale_center, hide_values, inset_labels, obs_units, format_value, shorten)
   } else if (inset_style == "split") {
-    top <- create_inset(map, level, "top", 5, inset_cutoff, cutoff_column, logratio, scale_center, hide_values, inset_labels, obs_units, format_value)
-    bottom <- create_inset(map, level, "bottom", 5, inset_cutoff, cutoff_column, logratio, scale_center, hide_values, inset_labels, obs_units, format_value)
+    top <- create_inset(map, level, "top", 5, inset_cutoff, cutoff_column, logratio, scale_center, hide_values, inset_labels, obs_units, format_value, shorten)
+    bottom <- create_inset(map, level, "bottom", 5, inset_cutoff, cutoff_column, logratio, scale_center, hide_values, inset_labels, obs_units, format_value, shorten)
     inset_text = paste0(top, "\n",bottom)
     }
   }
-  drop_regions = c("GU", "VI", "AS", "MP")
-  if(abbr %in% colnames(map)) {
-    pr = map |> filter(substr(fips, 1, 2) == "72")
-  } else {
-    pr = map |> filter(abbr == "PR")
-  }
-  
-  if(all(is.na(pr$Value))) {
-    drops_regions = c(drop_regions, "PR")
-  }
-
-  if (continental) { #filter out AK, HI, and PR after inset
+  if(level != "freefloating"){
+    drop_regions = c("GU", "VI", "AS", "MP")
     if("abbr" %in% colnames(map)) {
-      drop_regions = c(drop_regions, "AK", "HI", "PR")
-    } else{
-      for(abbr in drop_regions){
-        #this won't work for ZIP-level maps
-        map <- map |>
-          filter(!str_detect(name, paste0(", ", abbr, "$")))
+      pr = map |> filter(abbr == "PR")
+    } else {
+      pr = map |> filter(substr(fips, 1, 2) == "72")
+    }
+    
+    if(all(is.na(pr$Value))) {
+      drop_regions = c(drop_regions, "PR")
+    }
+  
+    if (continental) { #filter out AK, HI, and PR after inset
+      if("abbr" %in% colnames(map)) {
+        drop_regions = c(drop_regions, "AK", "HI", "PR")
+      } else{
+        for(abbr in drop_regions){
+          #this won't work for ZIP-level maps
+          map <- map |>
+            filter(!str_detect(name, paste0(", ", abbr, "$")))
+        }
+      }
+    state_map <- state_map |>
+      filter(!abbr %in% c("AK", "HI", "PR"))
+    }
+    if("abbr" %in% colnames(map)){
+      map <- map |>
+        filter(!abbr %in% drop_regions) 
+      if(!is.null(state_map)){
+       state_map <- state_map |>
+        filter(!abbr %in% drop_regions)  
       }
     }
-  state_map <- state_map |>
-    filter(!abbr %in% c("AK", "HI", "PR"))
-    }
-  if("abbr" %in% colnames(map)){
-  map <- map |>
-    filter(!abbr %in% drop_regions) 
   }
   
   map <- map |>
@@ -252,12 +299,12 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
     } else {
       graphicsparams = NULL
     }
-    choropleth <- choropleth_map(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, increment, dollar, unit, format_value, format_value_no_unit, city_insets, graphicsparams)
+    choropleth <- choropleth_map(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, increment, dollar, unit, format_value, format_value_no_unit, city_insets, graphicsparams, append_unit)
     plot = choropleth$plot
     breaks = choropleth$breaks
   }
   
-  plot <- add_theme(plot, title, palette, subtitle, font_size, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag, level, inset_box, v_adj)
+  plot <- add_theme(plot, title, palette, subtitle, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag, level, inset_box, v_adj)
   
   filepath = paste0(graphicspath, str_remove_all(title, "[ '()<>%]"), source, "_", level, ".jpg")
   showtext_opts(dpi = dpi)
@@ -304,7 +351,6 @@ compute_bubble_breaks <- function(values) { # This is for finding good bubble si
   min_value <- max(min(values , na.rm = TRUE),1)
   
   powers_of_10 <- 10^(ceiling(log10(min_value)):floor(log10(max_value)))
-  
   if (max_value > 5 * max(powers_of_10)) {
     powers_of_10 <- c(powers_of_10, 5 * max(powers_of_10))
   } else if(max_value > 2 * max(powers_of_10)){
@@ -317,32 +363,6 @@ compute_bubble_breaks <- function(values) { # This is for finding good bubble si
   }
   return(breaks)
 }
-
-# compute_breaks <- function(values, n_breaks){
-#   values = sort(values)
-#   if(length(values) > 10){
-#     n = min(ceiling(length(values)/10), 10)
-#     topn = values[1:n]
-#     diffs = topn[1:n-1] - topn[2:n]
-#     cut_values = values[1:(length(values) - which.max(diffs) + 1)]
-#   }else {
-#     cut_values = values
-#   }
-#   max_value <- max(cut_values, na.rm = TRUE)
-#   min_value <- max(min(cut_values , na.rm = TRUE), 0.000001)
-#   powers_of_10 <- 10^(floor(log10(min_value)):floor(log10(max_value)))
-#   potential_breaks = c(powers_of_10, 2*powers_of_10, 5*powers_of_10)
-#   potential_breaks = potential_breaks[potential_breaks < max_value] #take out breaks above max value
-#   potential_breaks = potential_breaks[potential_breaks > min_value] #take out breaks below min value
-#   #maybe something where if only one observation is in the top break, then drop it
-#   breaks <- sort(unique(potential_breaks))
-#   breaks = tail(breaks, n_breaks-1)
-#   breaks = c(round_to_sigfigs(min(values), 2, "floor"),
-#                   breaks,
-#                   round_to_sigfigs(max(values), 2,"ceiling"))
-#   cat("Auto breaks: ", breaks, "\n")
-#   return(breaks)
-# }
 
 compute_breaks <- function(values, n_breaks = 5) {
   values <- sort(values[!is.na(values)])
@@ -378,8 +398,7 @@ compute_breaks <- function(values, n_breaks = 5) {
   return(breaks)
 }
 
-
-remove_empty_breaks <- function(map, breaks){ #this code tends to cause issues. should rewrite 
+remove_empty_breaks <- function(map, breaks){
   data <- map$Value
   
   # Always include the first break (minimum value)
@@ -416,39 +435,32 @@ round_to_sigfigs <- function(value, sigfigs, method = c("floor", "ceiling")) {
   }
 }
 
-append_unit <- function(dollar, unit) {
-  function(x) {
-    sign <- ifelse(x < 0, "-", "")
-    paste0(sign, dollar, shorten(abs(x)), unit)
-  }
-}
-
 #vectorized it
-shorten <- function(value) {
-  sapply(value, function(v) {
-    if (is.na(v)) return("")
-
-    abs_val <- abs(v)
-
-    # if (abs_val >= 1000 && abs_val < 10000) {
-    #   return(comma_format()(round(v)))
-    # }
-
-    thresholds <- c(1e12, 1e9, 1e6, 1e3, 1)
-    suffixes   <- c("t",   "b",  "m",  "k", "")
-
-    for (i in seq_along(thresholds)) {
-      if (abs_val >= thresholds[i]) {
-        display_value <- v / thresholds[i]
-        sigfigs = 3
-        # sigfigs <- if (display_value >= 100) 3 else 2
-        return(paste0(signif(display_value, sigfigs), suffixes[i]))
-      }
-    }
-
-    return(as.character(signif(v, 2)))
-  })
-}
+# shorten <- function(value) {
+#   sapply(value, function(v) {
+#     if (is.na(v)) return("")
+# 
+#     abs_val <- abs(v)
+# 
+#     # if (abs_val >= 1000 && abs_val < 10000) {
+#     #   return(comma_format()(round(v)))
+#     # }
+# 
+#     thresholds <- c(1e12, 1e9, 1e6, 1e3, 1)
+#     suffixes   <- c("t",   "b",  "m",  "k", "")
+# 
+#     for (i in seq_along(thresholds)) {
+#       if (abs_val >= thresholds[i]) {
+#         display_value <- v / thresholds[i]
+#         sigfigs = 3
+#         # sigfigs <- if (display_value >= 100) 3 else 2
+#         return(paste0(signif(display_value, sigfigs), suffixes[i]))
+#       }
+#     }
+# 
+#     return(as.character(signif(v, 2)))
+#   })
+# }
 
 #Distinguishable colors for categorical maps
 type_colors <- function(n_types){
@@ -476,7 +488,7 @@ make_caption <- function(source, years = NA, caption_manual = "") {
   year_range <- if (!is.na(years[1])) paste0(min(years), "-", max(years)) else NULL
   
   base_caption <- switch(source,
-    "USDA"  = "Source: USDA Agriculture Census",
+    "USDA"  = "Source: USDA Agriculture Census", #could remove "Agriculture Census" because I realized sometimes the data from the API is coming from the vegetable survey
     "IRS"   = paste0("Source: ", year_range, " IRS Migration Data"),
     "ACS"   = "Source: ACS Migration Data",
     if (!is.null(year_range)) paste0("Years: ", year_range) else ""
@@ -505,12 +517,12 @@ set_palette <- function(user_palette) {
   default_palette <- list(
     "high_color" = "red", #forestgreen
     "mid_color" = "#FFE5B4",  # #FFE5B4 #ECE4D5 #ffda9a
-    "low_color" = "blue", #  #CC5500
+    "low_color" = "blue", # #CC5500
     "background_color" = "#E8DACC",# #f1e0cf
     "title_color" = "#363c45",
     "text_color" = "#363c45",
     "highlight_color" = "steelblue",
-    "na_color" = "gray80"
+    "na_color" = "gray85" #gray80
   )
   return(modifyList(default_palette, user_palette)) #overwrites defaults
 }
@@ -519,29 +531,19 @@ set_palette <- function(user_palette) {
 #create_inset
 ```{r}
 #Exclude Puerto Rico? Sometimes yes sometimes no? For county maps I don't want it to be the entire top or bottom
-create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff, cutoff_column, logratio, scale_center, hide_values, inset_labels, obs_units, format_value) {
+create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff, cutoff_column, logratio, scale_center, hide_values, inset_labels, obs_units, format_value, shorten) {
   
   style <- match.arg(style)
   
-  # if(level == "county"){
-  #   map <- map |>
-  #     mutate(name = case_when(fips == "57001" ~ "Overseas",
-  #                           fips == "57003" ~ "Puerto Rico",
-  #                           fips == "57005" ~ "Military Deployment",
-  #                           fips == "57007" ~ "U.S. Virgin Islands",
-  #                           T ~ name
-  #                           ))
-  # }
   inset_data <- map |>
     st_drop_geometry() |>
         filter(cutoff >= inset_cutoff,
            !is.na(Value),
            !is.na(name))
   
-  # Taking out DC because people complained and PR because people will complain
   if(level == "state"){
     inset_data <- inset_data |>
-      filter(!fips %in% c("11", "72"))  
+      filter(!fips %in% c(11, 72)) #technically not states but idk
   }
 
   if(logratio){
@@ -603,19 +605,17 @@ inset_data <- inset_data |>
 
 #add_theme
 ```{r}
-#legend takes up too much space when it has to do color and size, covers up caption
 #having issues with high max_bubble_size (> ~30), but that may be unavoidable due to space constraints
-add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag, level, inset_box, v_adj) {
+#redo auto font size using grobwidth
+add_theme <- function(plot, title, palette, subtitle, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag, level, inset_box, v_adj) {
 
   font = "Arial"
+  inset_font_size = 11.5
 
   title_height = 1.04
 
-  if(is.na(font_size)){
-    font_size = min(36*38/nchar(title), 36) #the plot is a bit more than 40 characters wide at font size 36, but at font size 36 I'd still want some breathing room so 36 characters is when I start reducing the font size (depends on the font you're using)
-    #this was done using another font, I think 38 is better now
-    cat("Auto font size: ", font_size,"\n")
-  }
+  font_size = min(36*38/nchar(title), 36) #the plot is a bit more than 40 characters wide at font size 36, but at font size 36 I'd still want some breathing room so 36 characters is when I start reducing the font size (depends on the font you're using)
+  cat("Auto font size: ", font_size,"\n")
   
   negative_margin = -10
   relative_negative_margin = 0.012 #how far in the edge moves from the negative margin on the side (symmetrical)
@@ -625,22 +625,33 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
   #shift everything down for continental map
   continental_offset = if_else(continental, 0.155, 0) #trial and error for this, need to update it based on some changes I made but I never actually use this setting so I'm putting it off, was 0.127 for old alignment
 
-  # For inset box
-  inset_font_size = 11.5
-
   #use v_adj when freefloating map has messed up alignment to get caption and inset back to where they should be
   y_pos <- unit(-0.258 - continental_offset + v_adj, "npc") #bottom of panel, used for caption and inset
   x_box <- unit(if_else(level == "puma", 0.99, 0.8) - relative_negative_margin, "npc") #right edge of inset box
-  #puma level maps need really wide insets
 
-
+  if (is.na(breaks[1]) & !bubbles) { #continuous color scale
+  plot <- plot +
+    guides(
+      fill = guide_colorbar(
+        barwidth = unit(7, "cm"),
+        barheight = unit(0.5, "cm"),
+        ticks.colour = "black",
+        ticks.linewidth = 0.7,
+        label.position = "bottom",
+        title.position = "top",
+        frame.colour = "black",
+        frame.linewidth = 1,
+      )
+    )
+}
+  
   plot <- plot +
     theme_minimal(base_family = font) +
     theme(
-      legend.title = element_blank(),
-      legend.text = element_text(size = 14, color = palette$text_color, face = "bold"),
+      legend.title = element_blank(), #Noto Sans works with weak equality bold symbols but it's annoying that it doesn't match the rest of the map
+      legend.text = element_text(size = 14, family = "notosans", color = palette$text_color, face = "bold"),
       legend.position = "inside",
-      legend.position.inside = c(relative_negative_margin, -0.02),
+      legend.position.inside = c(relative_negative_margin + if_else(is.na(breaks[1]), 0.01 , 0), -0.02), #if color bar has a label at the left end it needs a little extra space
       legend.justification = c("left", "top"),
       legend.direction = "horizontal",
       legend.key.width = unit(if_else(bubbles, min(sqrt(max_bubble_size)/4, 0.75), 0.5), "cm"),
@@ -775,10 +786,11 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
   }
 
   #didn't try very hard to make it work but it seems this kinda might not work if I put it in choropleth_map idk why
-  if (!bubbles & level != "freefloating") {
+  if (!bubbles & level != "freefloating" & !is.na(breaks[1])) {
     plot <- plot +
       theme(legend.key = element_rect(fill = NA, color = "black",  linewidth = 1.75))
   }
+    
 
     #This works for center aligned text regardless of negative margins but adds white bars at the top and bottom
   #   p_final <- ggdraw() +
@@ -796,7 +808,7 @@ add_theme <- function(plot, title, palette, subtitle, font_size, caption, inset_
 
 #handle_per
 ```{r}
-handle_per <- function(map, source, per, subtitle, scale_factor) {
+handle_per <- function(map, source, per, subtitle, scale_factor, shorten) {
   
   if (per %in% c("capita", "capita_total") ) {
       map <- map |> 
@@ -946,99 +958,164 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
 }
 ```
 
+
+```{r}
+# us_roads <- primary_roads(year = 2023) %>% st_transform(3857)
+
+# library(rnaturalearth)
+# 
+# # Major rivers, 10m resolution
+# rivers10 <- ne_download(
+#   scale = 10,
+#   type = "rivers_lake_centerlines",
+#   category = "physical",
+#   returnclass = "sf"
+# ) |> st_transform(3857) |>
+#   select(geometry)
+# 
+# # Major lakes, 10m resolution
+# lakes10 <- ne_download(
+#   scale = 10,
+#   type = "lakes",
+#   category = "physical",
+#   returnclass = "sf"
+# ) |> st_transform(3857) |>
+#   select(geometry)
+# 
+# us_water = rbind(rivers10, lakes10)
+
+```
+
+
 #choropleth_map
 ```{r}
-#maybe for state level maps the coloring should be continuous because the labels give the exact values??
-choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, increment, dollar, unit, format_value, format_value_no_unit, city_insets, graphicsparams) {
+#add ability to handle diverging color palette for continuous scale (!is.na(scale_center))
+#there is a bug for continuous color scale where nothing is assigned to NA and it defaults to gray70
+choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, increment, dollar, unit, format_value, format_value_no_unit, city_insets, graphicsparams, append_unit) {
   
-  if ("Type" %in% data_type) {
+  continuous_scale <- FALSE
+  
+  # If "Type" variable exists, use categorical scale
+  if (data_type == "Type") {
     map <- map %>% mutate(Type = as.factor(Type))
     type_levels <- levels(map$Type)
-    type_colors = type_colors(length(type_levels))
+    type_colors <- type_colors(length(type_levels))
     bin_palette <- setNames(type_colors, type_levels)
     formatted_labels <- type_levels
-  } else {
+    
+  } else if (data_type == "Value") {
+    
     vals <- map$Value
     vals <- vals[!is.na(vals)]
     
-    # Handle scale centering
-    if (!is.na(breaks[1]) && !is.na(scale_center)) {
-      breaks <- c(-abs(breaks), abs(breaks)) + scale_center
-      breaks <- sort(unique(breaks))
-      if (logratio) {
-        if (scale_center != 0) {
-          warning("scale_center ≠ 0 makes no sense for log ratio, ignoring.\n")
-          scale_center = 0
-        }
-        breaks <- exp(breaks)
-        map <- map %>% mutate(Value = exp(Value))
-        vals <- map$Value
-      }
-    }
-    
-    # If breaks not provided → compute automatically
+    # Continuous scale
     if (is.na(breaks[1])) {
-      num_data_points <- length(vals)
-      num_breaks <- ifelse(num_data_points > 20, 5, 4)
-      breaks <- compute_breaks(vals, num_breaks)
-    }
-    
-    # Ensure breaks cover the full range of data
-    rng <- range(vals, na.rm = TRUE)
-    breaks <- sort(unique(c(
-      round_to_sigfigs(rng[1], 2, "floor"),
-      breaks[breaks > rng[1] & breaks < rng[2]],
-      round_to_sigfigs(rng[2], 2, "ceiling")
-    )))
-    
-    # Remove empty breaks
-    breaks <- remove_empty_breaks(map, breaks)
-    
-    if (length(breaks) < 3) {
-      # Generate breaks if too few survived
-      breaks <- compute_breaks(vals, 5)
+      continuous_scale <- TRUE
+      
+      # handle logratio transformation if needed
+      if (logratio) {
+        map <- map %>% mutate(Value = exp(Value))
+      }
+      
+      # We'll directly use scale_fill_gradientn later
+      min_val <- min(vals, na.rm = TRUE)
+      max_val <- max(vals, na.rm = TRUE)
+      
+      # For state-level maps we still assign bin_color for labeling
+      gradient_func <- colorRampPalette(c(palette$mid_color, palette$high_color))
+      num_colors <- 100
+      gradient_colors <- gradient_func(num_colors)
+      val_scaled <- scales::rescale(map$Value, to = c(1, num_colors))
+      map$bin_color <- gradient_colors[round(val_scaled)]
+      
+    # Binned scale
+    } else {
+      
+      # Handle scale centering
+      if (!is.na(scale_center)) {
+        if(is.na(breaks[1])) {
+          stop("compute_breaks doesn't work with centered scale yet. Provide breaks.")
+        } 
+        breaks <- c(-abs(breaks), abs(breaks)) + scale_center
+        breaks <- sort(unique(breaks))
+        if (logratio) {
+          if (scale_center != 0) {
+            warning("scale_center ≠ 0 makes no sense for log ratio, ignoring.\n")
+            scale_center = 0
+          }
+          breaks <- exp(breaks)
+          map <- map %>% mutate(Value = exp(Value))
+          vals <- map$Value
+        }
+      } # else if(is.na(breaks[1])) {
+      #     num_data_points <- length(vals)
+      #     num_breaks <- ifelse(num_data_points > 20, 5, 4)
+      #     breaks <- compute_breaks(vals, num_breaks)
+      # } 
+      
+      # Compute breaks automatically if missing (but not NA)
+      if (length(breaks) < 2) {
+        num_data_points <- length(vals)
+        num_breaks <- ifelse(num_data_points > 20, 5, 4)
+        breaks <- compute_breaks(vals, num_breaks)
+      }
+      
+      # Ensure breaks cover the full range
+      rng <- range(vals, na.rm = TRUE)
+      breaks <- sort(unique(c(
+        round_to_sigfigs(rng[1], 2, "floor"),
+        breaks[breaks > rng[1] & breaks < rng[2]],
+        round_to_sigfigs(rng[2], 2, "ceiling")
+      )))
+      
       breaks <- remove_empty_breaks(map, breaks)
-    }
-    
-    if (is.na(labels_manual[1])) {
-      lower_breaks <- head(breaks, -1)
-      upper_breaks <- breaks[-1]
-  if (!show_endpoints) {
-    first_label <- paste0(if_else(increment == 0, "<", "≤"), format_value(upper_breaks[1]))
-    middle_labels <- paste0(format_value_no_unit(lower_breaks[-1] + increment), " to ", 
-                             format_value(upper_breaks[-1]))
-      formatted_labels <- c(first_label, middle_labels)
-      formatted_labels[length(formatted_labels)] <- paste0(if_else(increment == 0, ">", "≥"), format_value(lower_breaks[length(lower_breaks)] + increment))
-    
-  } else {
-    # If showing endpoints, use exact values without increment adjustment
-    formatted_labels <- paste0(format_value_no_unit(lower_breaks), " to ", 
-                             format_value(upper_breaks))
-  }
-} else {
-      formatted_labels <- labels_manual
-      expected_labels = length(breaks) - 1
-      if (length(formatted_labels) != expected_labels) {
-        stop(glue("Label count ({length(formatted_labels)}) does not match expected number of labels ({expected_labels})."))
+      if (length(breaks) < 3) {
+        breaks <- compute_breaks(vals, 5)
+        breaks <- remove_empty_breaks(map, breaks)
+      }
+      
+      # Labels
+      if (is.na(labels_manual[1])) {
+        lower_breaks <- head(breaks, -1)
+        upper_breaks <- breaks[-1]
+        if (!show_endpoints) { # \u2264 = ≤, \u2265 = ≥
+          first_label <- paste0(if_else(increment == 0, "<", "\u2264"), format_value(upper_breaks[1]))
+          middle_labels <- paste0(format_value_no_unit(lower_breaks[-1] + increment), " to ", 
+                                  format_value(upper_breaks[-1]))
+          formatted_labels <- c(first_label, middle_labels)
+          formatted_labels[length(formatted_labels)] <- paste0(if_else(increment == 0, ">", "\u2265"), 
+                                                               format_value(lower_breaks[length(lower_breaks)] + increment))
+        } else {
+          formatted_labels <- paste0(format_value_no_unit(lower_breaks), " to ", format_value(upper_breaks))
+        }
+      } else {
+        formatted_labels <- labels_manual
+        expected_labels <- length(breaks) - 1
+        if (length(formatted_labels) != expected_labels) {
+          stop(glue("Label count ({length(formatted_labels)}) does not match expected ({expected_labels})."))
+        }
+      }
+      
+      map <- map %>%
+        mutate(Type = cut(Value,
+                          breaks = breaks,
+                          include.lowest = TRUE,
+                          labels = formatted_labels))
+      
+      if (!is.na(scale_center)) {
+        half <- length(breaks) / 2
+        low_palette <- seq_gradient_pal(palette$low_color, palette$mid_color)(seq(0, 1, length.out = half))
+        high_palette <- seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0, 1, length.out = half))
+        bin_palette <- c(low_palette[-length(low_palette)], high_palette)
+      } else {
+        bin_palette <- seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0, 1, length.out = length(breaks) - 1))
       }
     }
-    map <- map %>%
-      mutate(Type = cut(Value,
-                        breaks = breaks,
-                        include.lowest = TRUE,
-                        labels = formatted_labels))
-    
-    # Palette
-    if (!is.na(scale_center)) {
-      half <- length(breaks) / 2
-      low_palette <- seq_gradient_pal(palette$low_color, palette$mid_color)(seq(0, 1, length.out = half))
-      high_palette <- seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0, 1, length.out = half))
-      bin_palette <- c(low_palette[-length(low_palette)], high_palette)
-    } else {
-      bin_palette <- seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0, 1, length.out = length(breaks) - 1))
-    }
+  } else {
+    stop("data_type must be either Type or Value, not both.")
   }
-    plot <- ggplot(data = map)
+  
+  plot <- ggplot(data = map)
   
   if (level == "freefloating") {
     if ("Value" %in% data_type) {
@@ -1050,68 +1127,84 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
       with_shadow(
         geom_sf(data = state_map, color = "black", fill = "white", linewidth = 0.5),
         x_offset = 3, y_offset = 3, sigma = 3, color = "grey70"
-      ) + geom_sf(
+      ) +
+      geom_sf(
         data = map,
-        aes(color = Type),
+        aes(color = if (continuous_scale) Value else Type),
         size = max_bubble_size,
         alpha = 1
-      ) +
-      scale_color_manual(
-        values = bin_palette,
-        na.value = palette$na_color,
-        na.translate = TRUE,
-        labels = c(formatted_labels, na_label)
-      ) + guides(color = guide_legend(override.aes = list(size = 10),
-                                      ncol = ceiling((length(breaks) - 1) / 6)))
+      )
+    
+    if (continuous_scale) {
+      plot <- plot +
+        scale_color_gradientn(colors = seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0,1,length.out=256)), breaks = pretty(range(map$Value), n = 4)) +
+        guides(color = guide_colorbar(title = NULL))
+    } else {
+      plot <- plot +
+        scale_color_manual(values = bin_palette, na.value = palette$na_color, na.translate = TRUE,
+                           labels = c(formatted_labels, na_label)) +
+        guides(color = guide_legend(override.aes = list(size = 10),
+                                    ncol = ceiling((length(breaks) - 1) / 5))) #no more than 5 rows in legend
+    }
+    
   } else {
     plot = plot + 
       with_shadow(
-        geom_sf(aes(fill = Type), color = ifelse(borders, "white", NA), linewidth = 0.3),
+        geom_sf(aes(fill = if (continuous_scale) Value else Type),
+                color = ifelse(borders, "white", NA), linewidth = 0.3),
         x_offset = 3, y_offset = 3, sigma = 3, color = "grey70"
-      ) +
-      scale_fill_manual(
-        values = bin_palette,
-        na.value = palette$na_color,
-        na.translate = TRUE,
-        labels = c(formatted_labels, na_label)
-      ) + guides(fill = guide_legend(ncol = ceiling((length(breaks) - 1) / 6))) #at most 6 rows in the legend
+      )
+    
+    if (continuous_scale) {
+      plot <- plot + #I think there is a bug here when na_color isn't applied
+        scale_fill_gradientn(colors = seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0,1,length.out=256)),
+                             labels = function(x) append_unit(dollar, if (unit == "%") "%" else "")(x)) +
+        guides(fill = guide_colorbar(title = NULL))
+    } else {
+      plot <- plot +
+        scale_fill_manual(values = bin_palette, na.value = palette$na_color, na.translate = TRUE,
+                          labels = c(formatted_labels, na_label)) +
+        guides(fill = guide_legend(ncol = ceiling((length(breaks) - 1) / 6)))
     }
-  
-  
-  stateborders = case_when(level == "state" ~ 1,
-                        level == "county" ~ 0.5,
-                        level == "puma" ~ 0.5,
-                        T ~ 0.1)
-  
-  if (!is.null(state_map) & level != "freefloating") {
-    plot <- plot +
-      geom_sf(data = state_map, color = "black", fill = NA, linewidth = stateborders)
   }
   
+  # add borders
+  stateborders <- case_when(level == "state" ~ 1,
+                            level == "county" ~ 0.5,
+                            level == "puma" ~ 0.5,
+                            TRUE ~ 0.1)
+  
+  if (!is.null(state_map) & level != "freefloating") {
+    plot <- plot + geom_sf(data = state_map, color = "black", fill = NA, linewidth = stateborders)
+  }
+  
+  #doing this per observation is less than ideal but we only have 50 observations for these maps so it's ok
   if (level == "state") {
-    label_to_color <- tibble(Type = formatted_labels, bin_color = bin_palette)
-    
     map <- map %>%
-      left_join(label_to_color, by = "Type") %>%
       mutate(
-        bin_color = replace_na(bin_color, palette$na_color),
-        brightness = map_dbl(bin_color, ~ calculate_brightness(.x)),
+        bin_color = if (continuous_scale) bin_color else if_else(is.na(Type), palette$na_color, bin_palette[as.numeric(Type)]),
+        brightness = map_dbl(bin_color, calculate_brightness),
         text_color = if_else(brightness > 0.5, palette$text_color, "white")
       )
     
-    plot = add_state_labels(plot, map, palette, dollar, unit, increment)
+    plot <- add_state_labels(plot, map, palette, dollar, unit, append_unit)
   }
   
   if (!is.na(region)) {
     plot <- plot +
       geom_sf(data = region, fill = palette$highlight_color, color = "white")
   }
-  if(!level %in% c("county", "puma") & city_insets){
-      cat("City insets only make sense for level == county, PUMA, or freefloating. Freefloating not implemented yet.\n")
-      city_insets = F
-    }
   
-  if(city_insets) {
+  # city insets
+  if (!level %in% c("county", "puma") & city_insets) {
+    cat("City insets only make sense for level == county, PUMA, or freefloating. Freefloating not implemented yet.\n")
+    city_insets <- FALSE
+  }
+  if(continuous_scale & city_insets){
+    cat("City insets with continuous scale not implemented yet.\n")
+    city_insets = FALSE
+  }
+    if(city_insets) {
     
     map_3857 <- st_transform(map, 3857)
 
@@ -1178,10 +1271,15 @@ create_map_inset <- function(data_3857, lon, lat, zoom_km, title) {
     st_transform(3857)
   
   # Buffer in meters
-  crop_box <- st_buffer(center_point, dist = zoom_km * 1000) %>% st_bbox()
+  crop_box <- st_buffer(center_point, dist = zoom_km * 1000) %>% st_bbox() 
+  
+  # water_crop <- st_intersection(us_water, crop_box |> st_as_sfc())
+  # roads_crop <- st_intersection(us_roads, crop_box |> st_as_sfc())
   
   ggplot(data = data_3857) +
     geom_sf(aes(fill = Type), linewidth = 0.2, color = "gray80") + #very thin PUMA borders
+    # geom_sf(data = water_crop, color = "#80b1d3", size = 1.5) +
+    # geom_sf(data = roads_crop, color = "gray20", size = 0.4, linetype = "solid") +
     scale_fill_manual(
         values = bin_palette,
         na.value = palette$na_color,
@@ -1243,8 +1341,9 @@ filepaths <- imap(city_sets, ~build_inset_grid(.x, map_3857, palette, graphicspa
 #add_state_labels
 ```{r}
 #doesn't work for Categorical data yet
-add_state_labels <- function(plot, map, palette, dollar, unit, increment){
-  font = "Nunito" #not sure if it's working, looks exactly the same as Arial
+add_state_labels <- function(plot, map, palette, dollar, unit, append_unit){
+  # font = "Nunito" #not sure if it's working, looks exactly the same as Arial
+  font = "Arial"
   font_size = 4 #this is as big as the font can be without indiana and florida running into the borders a significant amount (the bold border don't help)
   
   
@@ -1276,43 +1375,60 @@ add_state_labels <- function(plot, map, palette, dollar, unit, increment){
 #     padding = c(1, 1, 1.1, 1, 1, 1.75, 1, 2, 1) # for box.padding
 #   ) #MA was 500 50 1.2 but it didn't work once I set expand to F
   
-    if(increment != 0) {
-      format_value = function(x){return(paste0(dollar, x))}
-      percent = ""
-    } else if(unit == "%"){
+    if(unit == "%"){
       format_value = append_unit(dollar, unit)
       percent = "%"
     } else {
       format_value = append_unit(dollar, "")
       percent = ""
     }
-    
+  
 map <- map |>
-  left_join(adjustments, by = "abbr") |>
-  mutate(
-    x = coalesce(x + x_adj, x),
-    y = coalesce(y + y_adj, y)
-  ) |>
-  select(-x_adj, -y_adj) |>
   mutate(label = format_value(Value),
          label = case_when(Value < 0.01 & Value > 0 ~ paste0("<", dollar, "0.01", percent), 
                            Value > -0.01 & Value < 0 ~ paste0(">-", dollar, "0.01", percent), #this will look kind of weird but idk what else to do to avoid signif making super long labels for very small numbers
                            T ~ label),
-                  label = gsub("NA", "", label)) #Remove "NA" label
+         nchar = nchar(label)) |>
+  filter(!str_detect(label, "NA")) #remove NA labels
+
+  #add thresholds for label length below which some states don't need repel
+  #HI: 2, VT: 1-2, NH: 2, MD: 1-2, NJ: 1-2
+  #make a list of states which actually don't need to be adjusted
+no_repel = map |>
+  filter((nchar <= 2 & abbr %in% c("HI", "VT", "NH")) |
+         (nchar == 1 & abbr %in% c("MD", "CT"))) |> #could add NJ but I would need to adjust its label south
+  pull(abbr) #I like this but also RI's repel doesn't look good when CT is taken away
+
+repels <- repels |>
+  filter(!abbr %in% no_repel)
+
+adjustments <- adjustments |>
+  filter(!abbr %in% no_repel)
+
+map <- map |>
+  left_join(adjustments, by = "abbr") |> #I think all the adjustment are fine, maybe VT and NH should be dropped if it doesn't get repelled
+  mutate(
+    x = coalesce(x + x_adj, x),
+    y = coalesce(y + y_adj, y)
+  ) |>
+    select(-x_adj, -y_adj)
+
 wv = map |> filter(abbr == "WV")
-wv_label_length = nchar(wv$label)
-if(wv_label_length > 4){
-  map <- map|>
-    filter(abbr != "WV")
-  plot <- plot +
-    geom_text(
-        data = wv,
-        aes(x = x, y = y, label = label, color = text_color),
-        size = font_size,
-        family = font,
-        fontface = "bold",
-        angle = 45
-      )
+if(nrow(wv) == 1){
+  wv_label_length = nchar(wv$label)
+  if(wv_label_length > 3){ #4 characters is borderline ok
+    map <- map|>
+      filter(abbr != "WV")
+    plot <- plot +
+      geom_text(
+          data = wv,
+          aes(x = x, y = y, label = label, color = text_color),
+          size = font_size,
+          family = font,
+          fontface = "bold",
+          angle = 45
+        )
+  }
 }
 # ma = map |> filter(abbr == "MA")
 # map <- map|>
@@ -1328,12 +1444,12 @@ if(wv_label_length > 4){
 #     )
 
 plot <- plot + 
-      geom_text(data = map %>% filter(!(abbr %in% c("DC", repels$abbr))), 
-         aes(x = x, y = y, label = label, color = text_color), 
-         size = font_size, 
-         family = font,
-         fontface = "bold") +
-      scale_color_identity()
+    geom_text(data = map %>% filter(!(abbr %in% c("DC", repels$abbr))), 
+       aes(x = x, y = y, label = label, color = text_color), 
+       size = font_size, 
+       family = font,
+       fontface = "bold") +
+    scale_color_identity()
 
 for (i in 1:nrow(adjustments)) {
   row <- repels[i, ]
