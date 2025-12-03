@@ -27,69 +27,50 @@ font_add_google(name = "Noto Sans", family = "notosans")
 showtext_auto()
 #TO DO:
 #map with per capita shading and bubbles/labels for absolute count
+#divergent continuous color scale
 ```
 
 ```{r}
 #after writing 1000+ loc I found out much of this functionality is already built :/
-#But building off of these functions wouldn't allow me to do all the things I want to do so I will keep building on this
+#But building off of these functions wouldn't allow me to do all the things I want to do so I will keep building...
 # vignette("usmap1", package = "usmap") # 1. Introduction
 # vignette("usmap2", package = "usmap") # 2. Mapping the US
 # vignette("usmap3", package = "usmap") # 3. Advanced Mapping
 ```
 
-
 ###map
 ```{r}
-map <- function(data, map, state_map = NULL, title, source, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, palette = list(), inset_cutoff = -Inf, cutoff_column = "Value", breaks = NA, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T, v_adj = 0, rounding = 0.01, increment = 0, city_insets = F) {
+map <- function(data, map, state_map = NULL, title, source, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, palette = list(), inset_cutoff = -Inf, cutoff_column = "Value", breaks = NA, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T, v_adj = 0, rounding = 0.1, numeric_type = "real", city_insets = F) {
   
-  #increment = 1 for counts, sometimes 0.1 if all data comes rounded to nearest 0.1
-  #increment changes the formatting of break labels from 1 to 5, 5 to 10 to 1 to 5, 6 to 10
-  
+  #numeric_type can be "real" for real numbers, "integer" for counts, or "year" for years
+  validate_numeric_type(numeric_type)
   #rounding controls which decimal place to round to
   
   palette = set_palette(palette)
   
-  shorten_func <- function(rounding) {
-
-  decimals <- max(0, -log10(rounding))
-
-  function(value) {
-    sapply(value, function(x) {
-      if (is.na(x)) return("")
-
-      abs_val <- abs(x)
-      thresholds <- c(1e12, 1e9, 1e6, 1e3, 1)
-      suffixes   <- c("t", "b", "m", "k", "")
-
-      for (i in seq_along(thresholds)) {
-        if (abs_val >= thresholds[i]) {
-          scaled <- x / thresholds[i]
-
-          if (decimals > 0) {
-            out <- formatC(scaled, format = "f", digits = decimals, drop0trailing = FALSE)
-          } else {
-            out <- formatC(scaled, format = "f", digits = 0, drop0trailing = TRUE)
-          }
-          return(paste0(out, suffixes[i]))
-        }
-      }
-
-      # values < 1, not covered above
-      if (decimals > 0) {
-        return(formatC(x, format = "f", digits = decimals, drop0trailing = FALSE))
-      } else {
-        return(formatC(x, format = "f", digits = 0, drop0trailing = TRUE))
-      }
-    })
+  if(numeric_type != "year"){ #2014 should not be shorted to 2.0k
+    shorten = shorten_func(rounding)
+  } else{
+    shorten <- function(x) x
   }
-}
-  shorten = shorten_func(rounding)
   
   append_unit <- function(dollar, unit) {
   function(x) {
     sign <- ifelse(x < 0, "-", "")
     paste0(sign, dollar, shorten(abs(x)), unit)
+    }
   }
+  
+  #this works but parts of it may be unused, will streamline later
+  if (numeric_type == "integer") {
+    format_value <- function(x) paste0(formatC(x, format="f", digits=0), unit)
+    format_value_no_unit <- function(x) formatC(x, format="f", digits=0)
+} else if (numeric_type == "year") {
+    format_value <- function(x) as.character(round(x))
+    format_value_no_unit <- function(x) as.character(round(x))
+} else {
+    format_value <- append_unit(dollar, unit)
+    format_value_no_unit <- append_unit(dollar, "")
 }
   
   #Maps go in map folder, sub-folders named by source
@@ -126,6 +107,10 @@ map <- function(data, map, state_map = NULL, title, source, years = NA, bubbles 
   if("Value" %in% data_type) {
     data <- data |>
       mutate(Value = Value * scale_factor) #for scaling (ex. scale_factor = 100000 for rate per 100000)
+    
+    if(numeric_type %in% c("integer", "year") & !all(data$Value %% 1 == 0, na.rm = T)){
+      cat("Warning: Non-integer data detected.\n")
+    }
   }
   
   if(logratio){ #log ratio: use with migration type = "net", supply breaks as log of the positive ratios you want as breaks ex. c(log(1.1), log(1.3), log(1.5))
@@ -137,10 +122,10 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
   
 #considering removing this, I could just handle before passing the data into the mapping function
   if (per == "capita" & length(years) > 1 | per == "year") {
-    num_years_ct = length(years[years < 2022]) #we don't have post-2021 data for CT due to the switch to planning regions, but I should write this better for post-2021 maps, but that is difficult without requiring that the data argument be un-aggregated by year
+    num_years_ct = length(years[years < 2022]) #we don't have post-2021 data for CT due to the switch to planning regions, but I should write this better for post-2021 maps, but that is difficult without requiring that the data be un-aggregated by year
     num_years_notct = length(years)
     data <- data |>
-      mutate(num_years = if_else(substr(fips, 1, 2) == "09" & level != "state", num_years_ct, num_years_notct), #CT
+      mutate(num_years = if_else(substr(fips, 1, 2) == "09" & level == "county", num_years_ct, num_years_notct), #CT
         Value = Value / num_years
       )
     subtitle <- if_else(is.na(subtitle) & per == "year", "Rate per year", subtitle)
@@ -193,6 +178,7 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
     }
   }
 
+  #user can supply units such as $/acre and they will display correctly
   dollar <- ""
   if (str_detect(unit, "\\$")) {
     dollar <- "$"
@@ -203,7 +189,7 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
   } else if (!str_detect(unit, "$[/:]")) {#ratios and rates don't have the space before
     unit <- paste0(" ", unit)
   }
-  
+  #I could probably remove a lot of this stuff and just handle it outside the mapping function
     if(per %in% c("capita", "capita_total", "year")){ #use capita_total to divide by population over a period of time but not year (ex. for cumulative % population changes over multiple years)
       if(is.na(years)[1]){
         stop("Specify which years the data are for.")
@@ -221,18 +207,15 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
   inset_style = "hidden"
   }
   
-  #vectorized string formatter
-  format_value <- append_unit(dollar, unit)
-  format_value_no_unit <- append_unit(dollar, "")
   
   if (inset_style == "hidden") {
     inset_text <- ""
-  } else{ 
+  } else{
     obs_units = case_when(obs_units != "auto" ~ obs_units,
-                      level == "county" ~ "Counties",
-                      level == "puma" ~ "Public Use Microdata Areas", #Used to just have PUMAs but I have enough space to type it out now
-                      level == "MSA" ~ "Counties/MSAs",
                       level == "state" ~ "States",
+                      level == "county" ~ "Counties",
+                      level == "puma" ~ "Public Use Microdata Areas",
+                      level == "MSA" ~ "Counties/MSAs",
                       level == "ZIP" ~ "ZIP Codes",
                       T ~ "")
     if (inset_style %in% c("top", "bottom")) {
@@ -251,7 +234,7 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
       pr = map |> filter(substr(fips, 1, 2) == "72")
     }
     
-    if(all(is.na(pr$Value))) {
+    if(all(is.na(pr$Value))) { #drop PR if it has no data
       drop_regions = c(drop_regions, "PR")
     }
   
@@ -278,9 +261,6 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
     }
   }
   
-  map <- map |>
-    filter(!st_is_empty(geometry))
-  
   if (bubbles) {
     if(is.na(max_bubble_size)){
     max_bubble_size = auto_mbs(map)
@@ -299,7 +279,7 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
     } else {
       graphicsparams = NULL
     }
-    choropleth <- choropleth_map(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, increment, dollar, unit, format_value, format_value_no_unit, city_insets, graphicsparams, append_unit)
+    choropleth <- choropleth_map(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, numeric_type, dollar, unit, format_value, format_value_no_unit, city_insets, graphicsparams, append_unit)
     plot = choropleth$plot
     breaks = choropleth$breaks
   }
@@ -315,6 +295,19 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
 
 #helper functions
 ```{r}
+validate_numeric_type <- function(numeric_type) {
+  valid_types <- c("real", "integer", "year")
+  if (!numeric_type %in% valid_types) {
+    stop(
+      sprintf(
+        "numeric_type must be one of: %s. Got '%s'.",
+        paste(valid_types, collapse = ", "),
+        numeric_type
+      ),
+      call. = FALSE
+    )
+  }
+}
 keep_columns <- function(df, cols_to_keep) { #because select() doesn't work if you give it columns that aren't in the data
   existing_cols <- intersect(cols_to_keep, colnames(df))
   return(df[, existing_cols, drop = FALSE])
@@ -396,6 +389,41 @@ compute_breaks <- function(values, n_breaks = 5) {
   breaks <- sort(unique(breaks))
   cat("Auto breaks: ", breaks, "\n")
   return(breaks)
+}
+
+shorten_func <- function(rounding = 0.1) {
+
+  decimals <- max(0, -log10(rounding))
+
+  function(value) {
+    sapply(value, function(x) {
+      if (is.na(x)) return("")
+
+      abs_val <- abs(x)
+      thresholds <- c(1e12, 1e9, 1e6, 1e3, 1)
+      suffixes   <- c("t", "b", "m", "k", "")
+
+      for (i in seq_along(thresholds)) {
+        if (abs_val >= thresholds[i]) {
+          scaled <- x / thresholds[i]
+
+          if (decimals > 0) {
+            out <- formatC(scaled, format = "f", digits = decimals, drop0trailing = FALSE)
+          } else {
+            out <- formatC(scaled, format = "f", digits = 0, drop0trailing = TRUE)
+          }
+          return(paste0(out, suffixes[i]))
+        }
+      }
+
+      # values < 1, not covered above
+      if (decimals > 0) {
+        return(formatC(x, format = "f", digits = decimals, drop0trailing = FALSE))
+      } else {
+        return(formatC(x, format = "f", digits = 0, drop0trailing = TRUE))
+      }
+    })
+  }
 }
 
 remove_empty_breaks <- function(map, breaks){
@@ -571,9 +599,9 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
   inset_data <- inset_data |>
     filter(rank_value <= last_rank_value)
   if(nrow(inset_data) > n){
+    n = nrow(inset_data)
     message("Expanding inset to ", n, " observations due to ties.\n")
   }
-  n = nrow(inset_data)
   
 inset_data <- inset_data |>
   mutate(
@@ -633,7 +661,7 @@ add_theme <- function(plot, title, palette, subtitle, caption, inset_text, break
   plot <- plot +
     guides(
       fill = guide_colorbar(
-        barwidth = unit(7, "cm"),
+        barwidth = unit(8, "cm"),
         barheight = unit(0.5, "cm"),
         ticks.colour = "black",
         ticks.linewidth = 0.7,
@@ -651,7 +679,7 @@ add_theme <- function(plot, title, palette, subtitle, caption, inset_text, break
       legend.title = element_blank(), #Noto Sans works with weak equality bold symbols but it's annoying that it doesn't match the rest of the map
       legend.text = element_text(size = 14, family = "notosans", color = palette$text_color, face = "bold"),
       legend.position = "inside",
-      legend.position.inside = c(relative_negative_margin + if_else(is.na(breaks[1]), 0.01 , 0), -0.02), #if color bar has a label at the left end it needs a little extra space
+      legend.position.inside = c(relative_negative_margin + if_else(is.na(breaks[1] & !bubbles), 0.02 , 0), -0.02), #if color bar has a label at the left end it needs a little extra space
       legend.justification = c("left", "top"),
       legend.direction = "horizontal",
       legend.key.width = unit(if_else(bubbles, min(sqrt(max_bubble_size)/4, 0.75), 0.5), "cm"),
@@ -821,7 +849,7 @@ handle_per <- function(map, source, per, subtitle, scale_factor, shorten) {
       mutate(Value = Value / (sqmi * 640))
   } else if (per != "" & per != "year") {
     map <- map |>
-      mutate(Value = Value / !!sym(per)) #this should handle sqmi
+      mutate(Value = Value / !!sym(per)) #this handles sqmi
   }
   
   return(list(map = map, subtitle = subtitle))
@@ -991,11 +1019,10 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
 ```{r}
 #add ability to handle diverging color palette for continuous scale (!is.na(scale_center))
 #there is a bug for continuous color scale where nothing is assigned to NA and it defaults to gray70
-choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, increment, dollar, unit, format_value, format_value_no_unit, city_insets, graphicsparams, append_unit) {
+choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, numeric_type, dollar, unit, format_value, format_value_no_unit, city_insets, graphicsparams, append_unit) {
   
   continuous_scale <- FALSE
   
-  # If "Type" variable exists, use categorical scale
   if (data_type == "Type") {
     map <- map %>% mutate(Type = as.factor(Type))
     type_levels <- levels(map$Type)
@@ -1017,7 +1044,6 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
         map <- map %>% mutate(Value = exp(Value))
       }
       
-      # We'll directly use scale_fill_gradientn later
       min_val <- min(vals, na.rm = TRUE)
       max_val <- max(vals, na.rm = TRUE)
       
@@ -1047,18 +1073,8 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
           map <- map %>% mutate(Value = exp(Value))
           vals <- map$Value
         }
-      } # else if(is.na(breaks[1])) {
-      #     num_data_points <- length(vals)
-      #     num_breaks <- ifelse(num_data_points > 20, 5, 4)
-      #     breaks <- compute_breaks(vals, num_breaks)
-      # } 
-      
-      # Compute breaks automatically if missing (but not NA)
-      if (length(breaks) < 2) {
-        num_data_points <- length(vals)
-        num_breaks <- ifelse(num_data_points > 20, 5, 4)
-        breaks <- compute_breaks(vals, num_breaks)
       }
+      
       
       # Ensure breaks cover the full range
       rng <- range(vals, na.rm = TRUE)
@@ -1073,20 +1089,23 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
         breaks <- compute_breaks(vals, 5)
         breaks <- remove_empty_breaks(map, breaks)
       }
-      
-      # Labels
+      discrete = numeric_type %in% c("year", "integer")
+      if(discrete) breaks = round(breaks) # I don't think this should cause issues, haven't done much testing
+ 
       if (is.na(labels_manual[1])) {
         lower_breaks <- head(breaks, -1)
-        upper_breaks <- breaks[-1]
-        if (!show_endpoints) { # \u2264 = ≤, \u2265 = ≥
-          first_label <- paste0(if_else(increment == 0, "<", "\u2264"), format_value(upper_breaks[1]))
+        upper_breaks <- tail(breaks, -1)
+        increment = as.numeric(discrete) # 1 for discrete, 0 for reals
+        if (!show_endpoints) { 
+          # \u2264 = ≤, \u2265 = ≥
+          first_label <- paste0(if_else(discrete, "\u2264", "<"), format_value(upper_breaks[1]))
           middle_labels <- paste0(format_value_no_unit(lower_breaks[-1] + increment), " to ", 
                                   format_value(upper_breaks[-1]))
           formatted_labels <- c(first_label, middle_labels)
-          formatted_labels[length(formatted_labels)] <- paste0(if_else(increment == 0, ">", "\u2265"), 
-                                                               format_value(lower_breaks[length(lower_breaks)] + increment))
+          formatted_labels[length(formatted_labels)] <- paste0(if_else(discrete, "\u2265", ">"), format_value(lower_breaks[length(lower_breaks)] + increment))
         } else {
-          formatted_labels <- paste0(format_value_no_unit(lower_breaks), " to ", format_value(upper_breaks))
+          formatted_labels <- paste0(format_value_no_unit(lower_breaks + if_else(lower_breaks == breaks[1], 0, increment)), " to ", format_value(upper_breaks) #don't add 1 to the lower bound of the first endpoint, don't add 1 to any endpoints unless it's integer/year (increment = 1)
+    )
         }
       } else {
         formatted_labels <- labels_manual
@@ -1095,7 +1114,6 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
           stop(glue("Label count ({length(formatted_labels)}) does not match expected ({expected_labels})."))
         }
       }
-      
       map <- map %>%
         mutate(Type = cut(Value,
                           breaks = breaks,
@@ -1244,6 +1262,7 @@ cities3 <- tibble::tribble(
   "Tampa Bay",     -82.5,    27.9,   45,
   "Sacramento",    -121.5,   38.6,   40
 )
+#I could probably cut this down to just 3 insets
 cities4 <- tibble::tribble(
   ~title,              ~lon,     ~lat,   ~zoom_km,
   "Indianapolis",      -86.15,   39.8,    45,
@@ -1386,7 +1405,7 @@ add_state_labels <- function(plot, map, palette, dollar, unit, append_unit){
 map <- map |>
   mutate(label = format_value(Value),
          label = case_when(Value < 0.01 & Value > 0 ~ paste0("<", dollar, "0.01", percent), 
-                           Value > -0.01 & Value < 0 ~ paste0(">-", dollar, "0.01", percent), #this will look kind of weird but idk what else to do to avoid signif making super long labels for very small numbers
+                           Value > -0.01 & Value < 0 ~ paste0(">-", dollar, "0.01", percent), #this will look kind of weird but idk what else to do to avoid false 0s or very long labels with signif()
                            T ~ label),
          nchar = nchar(label)) |>
   filter(!str_detect(label, "NA")) #remove NA labels
