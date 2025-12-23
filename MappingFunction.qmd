@@ -20,10 +20,12 @@ library(sysfonts)
 library(glue)
 library(moments) #for skewness and kurtosis functions
 library(cowplot) #for ggdraw
+library(colorspace)
 
 # font_add_google(name = "Nunito", family = "nunito") #extra bold looking font for state labels but it didn't work for some reason
 font_add_google(name = "Lekton", family = "lekton")
 font_add_google(name = "Noto Sans", family = "notosans")
+# font_add_google(name = "Source Code Pro", family = "sourcecode") #looks cool but maybe a little distracting
 showtext_auto()
 #TO DO:
 #map with per capita shading and bubbles/labels for absolute count
@@ -36,6 +38,10 @@ showtext_auto()
 # vignette("usmap1", package = "usmap") # 1. Introduction
 # vignette("usmap2", package = "usmap") # 2. Mapping the US
 # vignette("usmap3", package = "usmap") # 3. Advanced Mapping
+
+# colorspace::hcl_palettes(type = "sequential")
+# colorspace::hcl_palettes(type = "diverging")
+# colorspace::hcl_palettes(type = "qualitative")
 ```
 
 ###map
@@ -293,7 +299,52 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
 }
 ```
 
-#helper functions
+#color functions
+```{r}
+get_cs_palette <- function(n, type, name, reverse = TRUE) { #I prefer dark = high, light = low so I reverse
+  stopifnot(type %in% c("sequential", "diverging"))
+
+  cols <- switch(
+    type,
+    sequential = sequential_hcl(
+      n, palette = name, rev = reverse
+    ),
+    diverging = diverging_hcl(
+      n, palette = name, rev = reverse
+    )
+  )
+
+  cols
+}
+
+#computes midpoint color
+midpoint_rgb <- function(color1, color2, weight1) {
+  if(weight1 < 0 | weight1 > 1){
+    stop("weight1 is the weighting on the first color and must be between 0 and 1.\n")
+  }
+    col1 <- col2rgb(color1)
+    col2 <- col2rgb(color2)
+    mid_rgb <- weight1 * col1 + (1-weight1) * col2  # Biased the mix towards the mid_color so you can see the bubbles better
+    rgb(mid_rgb[1], mid_rgb[2], mid_rgb[3], maxColorValue = 255)
+}
+calculate_brightness <- function(color) {
+  rgb_values <- col2rgb(color) / 255  # Normalize RGB values to [0,1]
+  return(0.299 * rgb_values[1] + 0.587 * rgb_values[2] + 0.114 * rgb_values[3])  # Brightness formula
+}
+
+#Distinguishable colors for categorical maps
+type_colors <- function(n_types){
+    palette = c("#855C75","#D9AF6B","#AF6458","#736F4C","#526A83","#625377","#68855C","#9C9C5E","#A06177","#8C785D","#467378","#7C7C7C") # https://carto.com/carto-colors/ "antique" palette
+  if(n_types > length(palette)){
+    stop(paste0("Type column has ", n_types, "levels but maximum supported levels is ", length(palette), "\n"))
+  } else {
+    return(palette[1:n_types])
+  }
+}
+```
+
+
+#other helper functions
 ```{r}
 validate_numeric_type <- function(numeric_type) {
   valid_types <- c("real", "integer", "year")
@@ -325,20 +376,7 @@ auto_mbs = function(map){
   cat("Auto max bubble size: ", max_bubble_size, "\n")
   return(max_bubble_size)
 }
-#computes midpoint color
-midpoint_rgb <- function(color1, color2, weight1) {
-  if(weight1 < 0 | weight1 > 1){
-    stop("weight1 is the weighting on the first color and must be between 0 and 1.\n")
-  }
-    col1 <- col2rgb(color1)
-    col2 <- col2rgb(color2)
-    mid_rgb <- weight1 * col1 + (1-weight1) * col2  # Biased the mix towards the mid_color so you can see the bubbles better
-    rgb(mid_rgb[1], mid_rgb[2], mid_rgb[3], maxColorValue = 255)
-}
-calculate_brightness <- function(color) {
-  rgb_values <- col2rgb(color) / 255  # Normalize RGB values to [0,1]
-  return(0.299 * rgb_values[1] + 0.587 * rgb_values[2] + 0.114 * rgb_values[3])  # Brightness formula
-}
+
 compute_bubble_breaks <- function(values) { # This is for finding good bubble sizes for the legend
   max_value <- max(values, na.rm = TRUE)
   min_value <- max(min(values , na.rm = TRUE),1)
@@ -463,7 +501,6 @@ round_to_sigfigs <- function(value, sigfigs, method = c("floor", "ceiling")) {
   }
 }
 
-#vectorized it
 # shorten <- function(value) {
 #   sapply(value, function(v) {
 #     if (is.na(v)) return("")
@@ -489,16 +526,6 @@ round_to_sigfigs <- function(value, sigfigs, method = c("floor", "ceiling")) {
 #     return(as.character(signif(v, 2)))
 #   })
 # }
-
-#Distinguishable colors for categorical maps
-type_colors <- function(n_types){
-    if(n_types < 4) {
-      type_colors <- c( "#007f7f", "#0000ff", "#00ff00")[1:n_types]
-    } else {
-      type_colors <- viridis(n_types+1)[1:n_types] #so that the highest break isn't bright yellow
-    }
-  return(type_colors)
-}
 
 detect_level <- function(data, map) {
     case_when(
@@ -550,7 +577,8 @@ set_palette <- function(user_palette) {
     "title_color" = "#363c45",
     "text_color" = "#363c45",
     "highlight_color" = "steelblue",
-    "na_color" = "gray85" #gray80
+    "na_color" = "gray85", #gray80,
+    "cs_palette" = NULL
   )
   return(modifyList(default_palette, user_palette)) #overwrites defaults
 }
@@ -637,12 +665,14 @@ inset_data <- inset_data |>
 #redo auto font size using grobwidth
 add_theme <- function(plot, title, palette, subtitle, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag, level, inset_box, v_adj) {
 
-  font = "Arial"
+  # font = "Arial"
+  font = "notosans"
+  
   inset_font_size = 11.5
 
   title_height = 1.04
 
-  font_size = min(36*38/nchar(title), 36) #the plot is a bit more than 40 characters wide at font size 36, but at font size 36 I'd still want some breathing room so 36 characters is when I start reducing the font size (depends on the font you're using)
+  font_size = min(36*34/nchar(title), 36) #the plot is ~36 characters wide at font size 36 (Noto Sans, Arial is 40), but at font size 36 I'd still want some breathing room
   cat("Auto font size: ", font_size,"\n")
   
   negative_margin = -10
@@ -769,6 +799,11 @@ add_theme <- function(plot, title, palette, subtitle, caption, inset_text, break
     box_x <- x_box - box_width / 2
   
   if (inset_box & inset_text != "") {
+    inset_fill_color <- if (!is.null(palette$cs_palette)) {
+    sequential_hcl(3,palette$cs_palette)[2] #middle of 3 colors
+  } else {
+    midpoint_rgb(palette$mid_color, palette$high_color, 0.7)
+  }
   plot <- plot +
     annotation_custom(
       roundrectGrob(
@@ -779,7 +814,7 @@ add_theme <- function(plot, title, palette, subtitle, caption, inset_text, break
         r = unit(0.03, "npc"),
         just = c("center", "bottom"),
         gp = gpar(
-          fill = midpoint_rgb(palette$mid_color, palette$high_color, 0.7),
+          fill = inset_fill_color,
           col = palette$text_color,
           lwd = 3
         )
@@ -986,7 +1021,7 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
 }
 ```
 
-
+attempt at adding rivers and roads to city insets
 ```{r}
 # us_roads <- primary_roads(year = 2023) %>% st_transform(3857)
 
@@ -1014,11 +1049,8 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
 
 ```
 
-
-#choropleth_map
+#choropleth_map TEST
 ```{r}
-#add ability to handle diverging color palette for continuous scale (!is.na(scale_center))
-#there is a bug for continuous color scale where nothing is assigned to NA and it defaults to gray70
 choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, numeric_type, dollar, unit, format_value, format_value_no_unit, city_insets, graphicsparams, append_unit) {
   
   continuous_scale <- FALSE
@@ -1048,11 +1080,23 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
       max_val <- max(vals, na.rm = TRUE)
       
       # For state-level maps we still assign bin_color for labeling
-      gradient_func <- colorRampPalette(c(palette$mid_color, palette$high_color))
-      num_colors <- 100
-      gradient_colors <- gradient_func(num_colors)
-      val_scaled <- scales::rescale(map$Value, to = c(1, num_colors))
-      map$bin_color <- gradient_colors[round(val_scaled)]
+      n_continuous = 256
+      if (!is.null(palette$cs_palette)) {
+        cs_type <- if (!is.na(scale_center)) "diverging" else "sequential"
+      
+        cont_colors <- get_cs_palette(
+          n     = n_continuous,
+          type  = cs_type,
+          name  = palette$cs_palette
+        )
+      } else {
+        cont_colors <- seq_gradient_pal(
+          palette$mid_color, palette$high_color
+        )(seq(0, 1, length.out = n_continuous))
+      }
+
+      val_scaled <- rescale(map$Value, to = c(1, n_continuous))
+      map$bin_color <- cont_colors[round(val_scaled)]
       
     # Binned scale
     } else {
@@ -1074,7 +1118,6 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
           vals <- map$Value
         }
       }
-      
       
       # Ensure breaks cover the full range
       rng <- range(vals, na.rm = TRUE)
@@ -1120,14 +1163,18 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
                           include.lowest = TRUE,
                           labels = formatted_labels))
       
-      if (!is.na(scale_center)) {
-        half <- length(breaks) / 2
-        low_palette <- seq_gradient_pal(palette$low_color, palette$mid_color)(seq(0, 1, length.out = half))
-        high_palette <- seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0, 1, length.out = half))
-        bin_palette <- c(low_palette[-length(low_palette)], high_palette)
+      n_bins <- length(breaks) - 1
+      if (!is.null(palette$cs_palette)) {
+        cs_type <- if (!is.na(scale_center)) "diverging" else "sequential"
+      
+        bin_palette <- get_cs_palette(n = n_bins, type = cs_type, name= palette$cs_palette)
       } else {
-        bin_palette <- seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0, 1, length.out = length(breaks) - 1))
+        bin_palette <- seq_gradient_pal(
+          palette$mid_color,
+          palette$high_color
+        )(seq(0, 1, length.out = n_bins))
       }
+      
     }
   } else {
     stop("data_type must be either Type or Value, not both.")
@@ -1155,7 +1202,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
     
     if (continuous_scale) {
       plot <- plot +
-        scale_color_gradientn(colors = seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0,1,length.out=256)), breaks = pretty(range(map$Value), n = 4)) +
+        scale_color_gradientn(colors = cont_colors, na.value = palette$na_color, breaks = pretty(range(map$Value), n = 4)) +
         guides(color = guide_colorbar(title = NULL))
     } else {
       plot <- plot +
@@ -1165,7 +1212,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
                                     ncol = ceiling((length(breaks) - 1) / 5))) #no more than 5 rows in legend
     }
     
-  } else {
+  } else { #not freefloating
     plot = plot + 
       with_shadow(
         geom_sf(aes(fill = if (continuous_scale) Value else Type),
@@ -1174,9 +1221,8 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
       )
     
     if (continuous_scale) {
-      plot <- plot + #I think there is a bug here when na_color isn't applied
-        scale_fill_gradientn(colors = seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0,1,length.out=256)),
-                             labels = function(x) append_unit(dollar, if (unit == "%") "%" else "")(x)) +
+      plot <- plot +
+        scale_fill_gradientn(colors = cont_colors, na.value = palette$na_color, labels = function(x) append_unit(dollar, if (unit == "%") "%" else "")(x)) +
         guides(fill = guide_colorbar(title = NULL))
     } else {
       plot <- plot +
@@ -1296,7 +1342,7 @@ create_map_inset <- function(data_3857, lon, lat, zoom_km, title) {
   # roads_crop <- st_intersection(us_roads, crop_box |> st_as_sfc())
   
   ggplot(data = data_3857) +
-    geom_sf(aes(fill = Type), linewidth = 0.2, color = "gray80") + #very thin PUMA borders
+    geom_sf(aes(fill = Type), linewidth = 0.25, color = "white") + #very thin PUMA borders
     # geom_sf(data = water_crop, color = "#80b1d3", size = 1.5) +
     # geom_sf(data = roads_crop, color = "gray20", size = 0.4, linetype = "solid") +
     scale_fill_manual(
@@ -1357,12 +1403,13 @@ filepaths <- imap(city_sets, ~build_inset_grid(.x, map_3857, palette, graphicspa
 }
 ```
 
+
 #add_state_labels
 ```{r}
 #doesn't work for Categorical data yet
 add_state_labels <- function(plot, map, palette, dollar, unit, append_unit){
-  # font = "Nunito" #not sure if it's working, looks exactly the same as Arial
-  font = "Arial"
+  font = "notosans"
+  
   font_size = 4 #this is as big as the font can be without indiana and florida running into the borders a significant amount (the bold border don't help)
   
   
