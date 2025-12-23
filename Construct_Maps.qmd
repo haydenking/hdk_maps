@@ -401,6 +401,80 @@ construct_county_map <- function(planningregions = F, va_merge = F, ag_districts
 #construct_puma_map
 Public Use Microdata Areas!
 ```{r}
+shorten_puma_name <- function(name) {
+  if (is.na(name) || trimws(name) == "") return(NA_character_)
+  
+  name <- sub(" PUMA", "", name)
+has_amp_before_county <- grepl(
+  "&.*\\b[A-Za-z]+ County\\s*\\([^)]*\\)", name
+) | grepl(
+  "\\b[A-Za-z]+ County\\s*\\([^)]*\\).*&", name
+)
+
+if (!has_amp_before_county) {
+  name <- sub(
+    "(\\b[A-Za-z]+ County\\s*\\([^)]*\\))(?!\\s*--)",
+    "\\1 --",
+    name,
+    perl = TRUE
+  )
+} #in at least one case (Broward County (West)), the -- is missing, so I added this, but in another there is just an & so I made an exception
+  parts <- strsplit(name, "--")[[1]]
+  parts <- trimws(parts)
+  parts <- parts[parts != ""]  # drop any empty fragments
+  
+  if (length(parts) == 0) return(NA_character_)
+  
+  # If the first part contains "City" or "Cities", keep only that
+  if (grepl("\\bCity|\\bCities", parts[1], ignore.case = TRUE)) {
+    base <- parts[1]
+  } else {
+    # drop regional commission prefix
+    if (grepl("Regional Commission", parts[1], ignore.case = TRUE) & length(parts) > 1) {
+      parts <- parts[-1]
+    }
+    if (length(parts) == 0) return(NA_character_)
+    base <- parts[length(parts)]
+  }
+  
+  # Combine both sides if short enough
+  if (length(parts) >= 2) {
+    combined <- paste(parts, collapse = " - ")
+    if (nchar(combined) <= 50) {
+      base <- combined
+    }
+  }
+  
+  # Keep City for these known names
+  keep_city <- c("Iowa City", "Sioux City", "Rapid City",
+                 "Salt Lake City", "Kansas City", "Oklahoma City",
+                 "New York City", "Atlantic City", "Panama City",
+                 "Carson City", "Daly City", "Jersey City", "Dodge City",
+                 "Garden City", "Cathedral City", "Pearl City", "Union City",
+                 "Ellicott City", "Elk City", "Florida City") #might be missing a few but I think I got almost all of them
+  keep_city_pattern <- paste(keep_city, collapse = "|")
+  
+  # Remove "City of" prefix
+  base <- sub("^City of\\s+", "", base, ignore.case = TRUE)
+  
+  # Remove "City", "Cities", "Town" unless followed by County/Parish/Borough
+  # or it's one of our known city names
+  if (!is.na(base) && base != "" && !grepl(keep_city_pattern, base, ignore.case = TRUE)) {
+    base <- gsub("\\b( Cities| City| Town| CDP)\\b(?!\\s*(County|Parish|Borough))", "",
+                 base, perl = TRUE, ignore.case = TRUE)
+  }
+  
+  # Clean spaces and punctuation
+  base <- gsub("\\s{2,}", " ", base)
+  base <- gsub("\\s+,", ",", base)
+  base <- gsub("\\s+&", " &", base)
+  base <- gsub("^,|^-|^&", "", base) #clean up beginning of name
+  
+  trimws(base)
+}
+
+
+#tigris seems to only let you get one state at a time for PUMAs so I get the shapes this way
 url <- "https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_puma20_500k.zip"
 
 tmp <- tempfile(fileext = ".zip")
@@ -413,10 +487,11 @@ construct_puma_map <- function(){
   puma_map <- puma_map |>
     filter(STATEFP20 != "66") |> #remove guam
     rename(fips = GEOID20,
-           abbr = STUSPS20) |>
+           abbr = STUSPS20,
+           full_name = NAMELSAD20) |>
     filter(!abbr %in% c("GU", "MP", "VI", "AS")) |>
     mutate(
-      puma = sapply(NAMELSAD20, shorten_puma_name),
+      puma = sapply(full_name, shorten_puma_name),
       name = paste0(puma, ", ", abbr)) 
   
     puma_map = shift_akhi(puma_map)
@@ -429,49 +504,11 @@ construct_puma_map <- function(){
     puma_map = rbind(puma_map, puertorico)
   
   puma_map <- puma_map |>
-    select(puma, name, abbr, fips)
+    select(puma, full_name, name, abbr, fips)
   
   return(puma_map)
 }
-
-#not perfect - leaves some ambiguous ones like "Coastal Region", but for the ones that have ended up in insets so far it has been good
-shorten_puma_name <- function(name) {
-  name <- sub(" PUMA", "", name)
-  parts <- strsplit(name, "--")[[1]]
-  parts <- trimws(parts)
-  
-  # drop regional commission prefix
-  if (grepl("Regional Commission", parts[1], ignore.case = TRUE)) {
-    parts <- parts[-1]
-  }
-  
-  # if 3+ parts, prefer the last (most local)
-  if (length(parts) >= 3) {
-    base <- parts[length(parts)]
-  } else if (length(parts) == 2) {
-    base <- parts[2]
-  } else {
-    base <- parts[1]
-  }
-  
-  # remove "City of" at start
-  base <- sub("^City of\\s+", "", base, ignore.case = TRUE)
-  
-  # remove City/Cities unless followed by County/Parish/Borough
-  base <- gsub("\\bCities\\b(?!\\s*(County|Parish|Borough))", "", base,
-               perl = TRUE, ignore.case = TRUE)
-  base <- gsub("\\bCity\\b(?!\\s*(County|Parish|Borough))", "", base,
-               perl = TRUE, ignore.case = TRUE)
-  
-  # clean spaces
-  base <- gsub("\\s{2,}", " ", base)
-  base <- gsub("\\s+,", ",", base)
-  base <- gsub("\\s+&", " &", base)
-  
-  return(trimws(base))
-}
 ```
-
 
 Read in and Save maps
 ```{r}
