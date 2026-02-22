@@ -115,7 +115,7 @@ shift_pr <- function(map) {
 
 #construct_state_map
 ```{r}
-construct_state_map <- function(state_maps = T) {
+construct_state_map <- function(state_maps = T, canada = F) {
   #5m resolution for non-state-level maps so that it matches the other map
   state_map <- states(resolution = if_else(state_maps, "20m", "5m"), cb = TRUE, year = 2020) |>
     rename(fips = GEOID,
@@ -137,6 +137,37 @@ construct_state_map <- function(state_maps = T) {
   }
   
   state_map = rbind(state_map, puertorico)
+  
+  if(canada){
+    #https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=lpr_000b21a_e.zip&k=%20%20%20130596&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lpr_000b21a_e.zip
+    canada = st_read("shapefiles/canadian_provinces/lpr_000b16a_e.shp")
+    canada <- st_transform(canada, st_crs(state_map))
+    canada <- st_simplify(canada, dTolerance = if_else(state_maps, 4000, 1000), preserveTopology = F)
+    canada_crosswalk <- read.csv(text = "
+    PRUID,name,fips,abbr
+    10,Newfoundland and Labrador,63,NL
+    11,Prince Edward Island,64,PE
+    12,Nova Scotia,65,NS
+    13,New Brunswick,66,NB
+    24,Quebec,67,QC
+    35,Ontario,68,ON
+    46,Manitoba,69,MB
+    47,Saskatchewan,70,SK
+    48,Alberta,71,AB
+    59,British Columbia,59,BC
+    60,Yukon,60,YT
+    61,Northwest Territories,61,NT
+    62,Nunavut,62,NU
+    ") |>
+      mutate(PRUID = as.character(PRUID),
+             fips = as.character(fips))
+    canada = canada |>
+      select(PRUID, geometry) |>
+      left_join(canada_crosswalk) |>
+      select(-PRUID)
+    state_map = rbind(state_map, canada)
+    #currently no areas or pops for these and mapping function doesn't handle alignment well - WIP
+  }
   
   state_map <- state_map |>
     mutate(centroid = st_centroid(geometry),
@@ -536,8 +567,10 @@ Read in and Save maps
   # st_write(state_map_largepr, "shapefiles/state_map_largepr/state_map_largepr.shp", delete_dsn = T)
   state_map_largepr = st_read("shapefiles/state_map_largepr/state_map_largepr.shp")
   
+  # na_map = construct_state_map(canada = T)
+  # still WIP
+  
   #haven't updated MSA map in a while and don't like using it so omitting it here
   # MSA_map = st_read("shapefiles/MSA_map/MSA_map.shp")
   # MSAs = read_csv("MSAs_crosswalk.csv")
 ```
-
