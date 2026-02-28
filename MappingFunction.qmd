@@ -4,6 +4,15 @@ format: html
 editor: source
 ---
 ```{r}
+library(showtext)
+library(sysfonts)
+font_add_google(name = "Lekton", family = "lekton")
+font_add_google(name = "Noto Sans", family = "notosans")
+# font_add_google(name = "Nunito", family = "nunito") #extra bold looking font for state labels but it didn't work for some reason
+# font_add("notosans", "Fonts/Noto_Sans/static/NotoSans-Regular.ttf")
+# font_add_google(name = "Source Code Pro", family = "sourcecode") #looks cool but maybe a little distracting
+showtext_auto()
+sysfonts::font_families()
 library(dplyr)
 library(purrr)
 library(stringr)
@@ -15,21 +24,20 @@ library(ggfx)
 library(ggrepel)
 library(grid)
 library(colorspace)
-library(showtext)
-library(sysfonts)
 library(glue)
 library(moments) #for skewness and kurtosis functions
 library(cowplot) #for ggdraw
 library(colorspace)
 
-# font_add_google(name = "Nunito", family = "nunito") #extra bold looking font for state labels but it didn't work for some reason
-font_add_google(name = "Lekton", family = "lekton")
-font_add_google(name = "Noto Sans", family = "notosans")
-# font_add_google(name = "Source Code Pro", family = "sourcecode") #looks cool but maybe a little distracting
-showtext_auto()
+library(osmdata)
+library(digest)
+
+# directory for cached OSM results
+osm_cache_dir <- "osm_cache"
+dir.create(osm_cache_dir, showWarnings = FALSE)
+
 #TO DO:
 #map with per capita shading and bubbles/labels for absolute count
-#divergent continuous color scale
 ```
 
 ```{r}
@@ -46,7 +54,7 @@ showtext_auto()
 
 ###map
 ```{r}
-map <- function(data, map, state_map = NULL, title, source, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, palette = list(), inset_cutoff = -Inf, cutoff_column = "Value", breaks = NA, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T, v_adj = 0, rounding = 0.1, numeric_type = "real", city_insets = F) {
+map <- function(data, map, state_map = NULL, title, source, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, palette = list(), inset_cutoff = -Inf, cutoff_column = "Value", breaks = NA, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T,  rounding = 0.1, numeric_type = "real", city_insets = F) {
   
   #numeric_type can be "real" for real numbers, "integer" for counts, or "year" for years
   validate_numeric_type(numeric_type)
@@ -100,8 +108,9 @@ map <- function(data, map, state_map = NULL, title, source, years = NA, bubbles 
   if(is.na(level)) {
     stop("Data level not recognized.")
   }
-
   cat("Level: ", level, "\n")
+  #currently only state-level canada is implemented. might combine second level canadian subdivisions with US counties later but probably not since it'd be hard to find a dataset with data for both, could be useful if I have to spatial join data maybe
+  canada = if_else("BC" %in% state_map$abbr, T, F)
   
   data_type = detect_data_type(data)
   
@@ -218,7 +227,7 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
     inset_text <- ""
   } else{
     obs_units = case_when(obs_units != "auto" ~ obs_units,
-                      level == "state" ~ "States",
+                      level == "state" ~ if_else(canada, "Subdivisions", "States"), #wanted to use "States/Provinces" but didn't want to exclude the 3 Arctic territories
                       level == "county" ~ "Counties",
                       level == "puma" ~ "Public Use Microdata Areas",
                       level == "MSA" ~ "Counties/MSAs",
@@ -280,7 +289,8 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
       graphicsparams = list(
         "title" = title,
         "graphicspath" = graphicspath,
-        "dpi" = dpi #could just have it fixed at 300
+        "dpi" = dpi, #could just have it fixed at 300
+        device = ragg::agg_jpeg
       )
     } else {
       graphicsparams = NULL
@@ -289,12 +299,13 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
     plot = choropleth$plot
     breaks = choropleth$breaks
   }
+  scale_type = if(is.na(scale_center)) "sequential" else "diverging" #feels like some duplicated code handling scale types, will streamline at some point
   
-  plot <- add_theme(plot, title, palette, subtitle, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag, level, inset_box, v_adj)
+  plot <- add_theme(plot, title, palette, subtitle, caption, inset_text, breaks, bubbles, max_bubble_size, tag, level, inset_box, scale_type, canada) #add experimental npc argument
   
-  filepath = paste0(graphicspath, str_remove_all(title, "[ '()<>%]"), source, "_", level, ".jpg")
+  filepath = paste0(graphicspath, str_remove_all(title, "[ '()<>%]"), source, "_", level, ".png")
   showtext_opts(dpi = dpi)
-  ggsave(filename = filepath, plot = plot, dpi = dpi, width = 10, height = 10) #set dpi to 100 for a cool retro look
+  ggsave(filename = filepath, plot = plot, dpi = dpi, width = 10, height = 10, device = ragg::agg_png) #set dpi to 100 for a cool retro look
   system2("open", filepath)
 }
 ```
@@ -303,18 +314,23 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
 ```{r}
 get_cs_palette <- function(n, type, name, reverse = TRUE) { #I prefer dark = high, light = low so I reverse
   stopifnot(type %in% c("sequential", "diverging"))
-
-  cols <- switch(
-    type,
-    sequential = sequential_hcl(
-      n, palette = name, rev = reverse
-    ),
-    diverging = diverging_hcl(
+  
+  cat(type)
+  cat("\n")
+  cat(name)
+  cat("\n")
+  
+  if(type == "sequential") {
+    palette = sequential_hcl(
       n, palette = name, rev = reverse
     )
-  )
+  } else {
+    palette = diverging_hcl(
+      n, palette = name, rev = FALSE #don't reverse the diverging palettes
+    )
+  }
 
-  cols
+  palette
 }
 
 #computes midpoint color
@@ -563,6 +579,73 @@ detect_data_type <- function(data) {
   if ("Type" %in% names(data)) return("Type")
   stop("data must have Value and/or Type column.")
 }
+# 
+# get_osm_water_for_inset <- function(
+#   bbox_3857,
+#   cache_dir = "osm_cache",
+#   min_lake_area = 1e6,   # 2 km²
+#   simplify_poly = 50
+# ) {
+# 
+#   dir.create(cache_dir, showWarnings = FALSE)
+# 
+#   cache_id <- digest::digest(list(
+#     bbox_3857,
+#     min_lake_area,
+#     simplify_poly
+#   ))
+# 
+#   cache_file <- file.path(cache_dir, paste0(cache_id, ".rds"))
+# 
+#   if (file.exists(cache_file)) {
+#     return(readRDS(cache_file))
+#   }
+# 
+#   # convert bbox to lon/lat for OSM
+#   bbox_lonlat <- st_as_sfc(bbox_3857, crs = 3857) |>
+#     st_transform(4326) |>
+#     st_bbox()
+# 
+#   # ---------------------------
+#   # Lakes (natural=water)
+#   # ---------------------------
+#   osm_lakes <- opq(bbox = bbox_lonlat) |>
+#     add_osm_feature("natural", "water") |>
+#     osmdata_sf(quiet = TRUE)
+# 
+#   lakes <- osm_lakes$osm_polygons |>
+#     st_transform(3857) |>
+#     st_make_valid() |>
+#     mutate(area_m2 = st_area(geometry)) |>
+#     filter(area_m2 >= units::set_units(min_lake_area, "m^2"))
+# 
+#   # ---------------------------
+#   # Wide rivers (riverbanks)
+#   # ---------------------------
+#   osm_rivers <- opq(bbox = bbox_lonlat) |>
+#     add_osm_feature("waterway", "riverbank") |>
+#     osmdata_sf(quiet = TRUE)
+# 
+#   rivers <- osm_rivers$osm_polygons |>
+#     st_transform(3857) |>
+#     st_make_valid()
+# 
+#   # ---------------------------
+#   # Combine + simplify
+#   # ---------------------------
+#   water_polygons <- rbind(lakes, rivers)
+# 
+#   if (nrow(water_polygons) > 0) {
+#     water_polygons <- st_simplify(
+#       water_polygons,
+#       dTolerance = simplify_poly,
+#       preserveTopology = TRUE
+#     )
+#   }
+# 
+#   saveRDS(water_polygons, cache_file)
+#   water_polygons
+# }
 ```
 
 #set_palette
@@ -579,6 +662,7 @@ set_palette <- function(user_palette) {
     "highlight_color" = "steelblue",
     "na_color" = "gray85", #gray80,
     "cs_palette" = NULL
+    #https://cran.r-project.org/web/packages/colorspace/vignettes/colorspace.html
   )
   return(modifyList(default_palette, user_palette)) #overwrites defaults
 }
@@ -663,30 +747,24 @@ inset_data <- inset_data |>
 ```{r}
 #having issues with high max_bubble_size (> ~30), but that may be unavoidable due to space constraints
 #redo auto font size using grobwidth
-add_theme <- function(plot, title, palette, subtitle, caption, inset_text, breaks, bubbles, max_bubble_size, continental, tag, level, inset_box, v_adj) {
-
-  # font = "Arial"
+add_theme <- function(plot, title, palette, subtitle, caption, inset_text, breaks, bubbles, max_bubble_size, tag, level, inset_box, scale_type, canada) {
+  
   font = "notosans"
   
-  inset_font_size = 11.5
+if (names(dev.cur()) == "null device") {
+  ragg::agg_png(tempfile(), width = 1, height = 1, units = "in", res = 72)
+} #I used to not need to do this before I started using ggdraw()
 
-  title_height = 1.04
-
-  font_size = min(36*34/nchar(title), 36) #the plot is ~36 characters wide at font size 36 (Noto Sans, Arial is 40), but at font size 36 I'd still want some breathing room
-  cat("Auto font size: ", font_size,"\n")
+  inset_font_size = 11.5 #replacing with dynamic text size for when inset is super long for PUMA maps
+  caption_font_size = 10
+  title_font_size = min(36*34/nchar(title), 36) #the plot is ~36 characters wide at font size 36 (Noto Sans, Arial is 40), but at font size 36 I'd still want some breathing room
+  cat("Auto title font size: ", title_font_size,"\n") #I tried using grobwidth for a more precise solution but it crashes because of some complicated font thing I don't understand
   
   negative_margin = -10
-  relative_negative_margin = 0.012 #how far in the edge moves from the negative margin on the side (symmetrical)
+  relative_negative_margin = 0.012 #want to retire this but still necessary for pre-ggdraw stuff
   
-  title_alignment = 0.5 #negative margin is equal on each side so title is centered
-  subtitle_offset = 0.07*(font_size/36) # Vertical adjustment for subtitle
-  #shift everything down for continental map
-  continental_offset = if_else(continental, 0.155, 0) #trial and error for this, need to update it based on some changes I made but I never actually use this setting so I'm putting it off, was 0.127 for old alignment
-
-  #use v_adj when freefloating map has messed up alignment to get caption and inset back to where they should be
-  y_pos <- unit(-0.258 - continental_offset + v_adj, "npc") #bottom of panel, used for caption and inset
-  x_box <- unit(if_else(level == "puma", 0.99, 0.8) - relative_negative_margin, "npc") #right edge of inset box
-
+  subtitle_offset = 0.07*(title_font_size/36) # Vertical adjustment for subtitle
+  
   if (is.na(breaks[1]) & !bubbles) { #continuous color scale
   plot <- plot +
     guides(
@@ -707,107 +785,82 @@ add_theme <- function(plot, title, palette, subtitle, caption, inset_text, break
     theme_minimal(base_family = font) +
     theme(
       legend.title = element_blank(), #Noto Sans works with weak equality bold symbols but it's annoying that it doesn't match the rest of the map
-      legend.text = element_text(size = 14, family = "notosans", color = palette$text_color, face = "bold"),
+      legend.text = element_text(size = 14, family = font, color = palette$text_color, face = "bold"),
       legend.position = "inside",
-      legend.position.inside = c(relative_negative_margin + if_else(is.na(breaks[1] & !bubbles), 0.02 , 0), -0.02), #if color bar has a label at the left end it needs a little extra space
+      legend.position.inside = c(relative_negative_margin + if_else(is.na(breaks[1]) & !bubbles, 0.02 , 0), -0.02), #if color bar has a label at the left end it needs a little extra space
       legend.justification = c("left", "top"),
       legend.direction = "horizontal",
       legend.key.width = unit(if_else(bubbles, min(sqrt(max_bubble_size)/4, 0.75), 0.5), "cm"),
       legend.key.height = unit(0.5, "cm"),
       panel.grid = element_blank(),
-      panel.background = element_rect(fill = palette$background_color, color = NA),
       plot.background = element_rect(fill = palette$background_color, color = NA),
       axis.title = element_blank(),
       axis.text = element_blank(),
       axis.ticks = element_blank(),
       legend.box.margin = margin(0, 0, 60, 0), #might need to adjust top margin
-      plot.margin = margin(if_else(continental, -140, -80), negative_margin, 0, negative_margin)
-    ) +
-    annotation_custom(textGrob(
-      title,
-      gp = gpar(
-        fontsize = font_size,
-        fontface = "bold",
-        col = palette$title_color, fontfamily = font
-      ),
-      x = unit(title_alignment, "npc"),
-      y = unit(title_height, "npc"),
-      hjust = 0.5
-    )) +
-    annotation_custom(textGrob(
-      if_else(tag, "@hdk_maps", ""),
-      gp = gpar(fontsize = 12, col = palette$title_color, fontface = "bold", fontfamily = "lekton"),
-      x = unit(title_alignment, "npc"),
-      y = unit(title_height - subtitle_offset - if_else(is.na(subtitle), 0, subtitle_offset/2), "npc"), #0.034
-      hjust = 0.5
-     )) +
-    coord_sf(clip = "off", expand = T) + #expand = F
-    annotation_custom(textGrob(
-      caption,
-      gp = gpar(fontsize = 10, col = palette$text_color, fontfamily = font),
-      x = unit(relative_negative_margin, "npc"),
-      y = y_pos - unit(0.01, "npc"),
-      hjust = 0,
-      vjust = 0
-    ))
+      #plot.margin = margin(if_else(continental, -140, -80), negative_margin, 0, negative_margin)
+      plot.margin = margin(-80, negative_margin, 0, negative_margin)
+    )
+
+  #didn't try very hard to make it work but it seems this kinda might not work if I put it in choropleth_map idk why
+  if (!bubbles & level != "freefloating" & !is.na(breaks[1])) {
+    plot <- plot +
+      theme(legend.key = element_rect(fill = NA, color = "black",  linewidth = 1.75))
+  }
   
-  # x_pos <- unit(if_else((level == "state" & !continental), 0.5, 0.32), "npc") #for non-right-aligned inset
-  #left-aligned inset
-  # if(inset_box & inset_text != "") {
-  #       plot = plot +
-  #   annotation_custom(
-  #     roundrectGrob(
-  #       x =  x_pos - unit(0.01, "npc"),
-  #       y = y_pos - unit(0.01, "npc"),
-  #       width = text_width + unit(0.02, "npc"),
-  #       height = text_height + unit(0.02, "npc"),
-  #       r = unit(0.03, "npc"), #0.1 is the most you can do without the corners bumping into the text but 0.03 looks better
-  #       just = c("left", "bottom"),
-  #       gp = gpar(fill = midpoint_rgb(palette$mid_color, palette$high_color, 0.7), col = palette$text_color, lwd = 3)
-  #     ))
-  # }
-  #   plot = plot +
-  #   annotation_custom(
-  #   textGrob(
-  #     inset_text,
-  #     x = x_pos,
-  #     y = y_pos,
-  #     just = c("left", "bottom"),
-  #     gp = gpar(
-  #       fontsize = inset_font_size,
-  #       fontface = "bold",
-  #       col = palette$text_color,
-  #       fontfamily = font)
-  #     ))
+  y_pos <- unit(0.01, "npc") #bottom of panel, used for caption and inset
+  x_box_right <- unit(if_else(canada | level == "puma", 0.99, 0.79), "npc") #right edge of inset box
+
   
     tg <- textGrob(
       inset_text,
       gp = gpar(
         fontsize = inset_font_size,
         fontface = "bold",
-        fontfamily = font
+        fontfamily = "sans" #changed to sans from notosans because of postscript
       )
     )
     text_width  <- grobWidth(tg)
     text_height <- grobHeight(tg)
-  
+
     padding <- unit(0.3, "cm")
   
     box_width  <- text_width + 2 * padding
     box_height <- text_height + 2 * padding
+
+    x_box_left <- x_box_right - box_width / 2
   
-    box_x <- x_box - box_width / 2
-  
+# if (names(dev.cur()) == "null device") grDevices::pdf(NULL) #moved earlier
+    
+title_height = 0.975
+suppressWarnings({
+plot <- ggdraw(plot, clip = "on") +
+  draw_label_box(
+    title,
+    x = 0.5,
+    y = title_height,
+    fontfamily = font,
+    fontsize = title_font_size,
+    text_color = palette$title_color,
+    fill_color = palette$background_color,
+    fontface = "bold"
+  )
+
   if (inset_box & inset_text != "") {
     inset_fill_color <- if (!is.null(palette$cs_palette)) {
-    sequential_hcl(3,palette$cs_palette)[2] #middle of 3 colors
+      if(scale_type == "diverging"){
+        diverging_hcl(3,palette$cs_palette)[2] #middle of 3 colors
+      } else {
+        sequential_hcl(3,palette$cs_palette)[2] #middle of 3 colors
+      }
   } else {
     midpoint_rgb(palette$mid_color, palette$high_color, 0.7)
   }
+
   plot <- plot +
     annotation_custom(
       roundrectGrob(
-        x = box_x,
+        x = x_box_left,
         y = y_pos,
         width = box_width,
         height = box_height,
@@ -825,7 +878,7 @@ add_theme <- function(plot, title, palette, subtitle, caption, inset_text, break
       annotation_custom(
         textGrob(
           inset_text,
-          x = x_box - box_width + padding,
+          x = x_box_right - box_width + padding, # x_box_left + padding??
           y = y_pos + padding,
           just = c("left", "bottom"),
           gp = gpar(
@@ -837,35 +890,43 @@ add_theme <- function(plot, title, palette, subtitle, caption, inset_text, break
         )
       )
 
-  if (!is.na(subtitle)) {
-    plot <- plot +
-      annotation_custom(textGrob(
-        subtitle,
-        gp = gpar(fontsize = font_size/2, col = palette$title_color, fontface = "bold", fontfamily = font),
-        x = unit(title_alignment, "npc"),
-        y = unit(title_height - subtitle_offset, "npc"),
-        hjust = 0.5
-      ))
-  }
+if (!is.na(subtitle)) {
+  plot <- plot +
+    draw_label_box(
+      subtitle,
+      x = 0.5,
+      y = title_height - subtitle_offset,
+      fontfamily = font,
+      fontsize = title_font_size / 2,
+      text_color = palette$title_color,
+      fill_color = palette$background_color,
+      fontface = "bold"
+    )
+}
 
-  #didn't try very hard to make it work but it seems this kinda might not work if I put it in choropleth_map idk why
-  if (!bubbles & level != "freefloating" & !is.na(breaks[1])) {
-    plot <- plot +
-      theme(legend.key = element_rect(fill = NA, color = "black",  linewidth = 1.75))
-  }
-    
-
-    #This works for center aligned text regardless of negative margins but adds white bars at the top and bottom
-  #   p_final <- ggdraw() +
-  # draw_plot(plot, 0, 0, 1, 1) +
-  # draw_label(title,
-  #            x = 0.5, y = 0.98,
-  #            hjust = 0.5, vjust = 1,
-  #            fontface = "bold",
-  #            size = font_size,
-  #            color = palette$title_color)
-    
-  return(plot)
+plot <- plot +
+  draw_label_box(
+    if_else(tag, "@hdk_maps", ""),
+    x = 0.5,
+    y = title_height - subtitle_offset - if_else(is.na(subtitle), 0, subtitle_offset / 2),
+    fontfamily = "lekton",
+    fontsize = 12,
+    text_color = palette$title_color,
+    fill_color = palette$background_color,
+    fontface = "bold"
+  ) +
+draw_label(
+  caption,
+  x = 0.003,
+  y = 0.0025,
+  hjust = 0,
+  vjust = 0,
+  size = caption_font_size,
+  color = palette$text_color,
+  fontfamily = font
+) + theme(panel.background = element_rect(fill = palette$background_color, color = NA))
+}) #need to suppress warnings due to postscript stuff
+    return(plot)
 }
 ```
 
@@ -1021,35 +1082,7 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
 }
 ```
 
-attempt at adding rivers and roads to city insets
-```{r}
-# us_roads <- primary_roads(year = 2023) %>% st_transform(3857)
-
-# library(rnaturalearth)
-# 
-# # Major rivers, 10m resolution
-# rivers10 <- ne_download(
-#   scale = 10,
-#   type = "rivers_lake_centerlines",
-#   category = "physical",
-#   returnclass = "sf"
-# ) |> st_transform(3857) |>
-#   select(geometry)
-# 
-# # Major lakes, 10m resolution
-# lakes10 <- ne_download(
-#   scale = 10,
-#   type = "lakes",
-#   category = "physical",
-#   returnclass = "sf"
-# ) |> st_transform(3857) |>
-#   select(geometry)
-# 
-# us_water = rbind(rivers10, lakes10)
-
-```
-
-#choropleth_map TEST
+#choropleth_map
 ```{r}
 choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, numeric_type, dollar, unit, format_value, format_value_no_unit, city_insets, graphicsparams, append_unit) {
   
@@ -1082,17 +1115,20 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
       # For state-level maps we still assign bin_color for labeling
       n_continuous = 256
       if (!is.null(palette$cs_palette)) {
-        cs_type <- if (!is.na(scale_center)) "diverging" else "sequential"
+        cs_type <- if (is.na(scale_center)) "sequential" else "diverging"
       
-        cont_colors <- get_cs_palette(
-          n     = n_continuous,
-          type  = cs_type,
-          name  = palette$cs_palette
-        )
+        cont_colors <- get_cs_palette(n = n_continuous, type = cs_type, name = palette$cs_palette)
       } else {
-        cont_colors <- seq_gradient_pal(
+        if (is.na(scale_center)) {
+          cont_colors <- seq_gradient_pal(
           palette$mid_color, palette$high_color
         )(seq(0, 1, length.out = n_continuous))
+        } else {
+        low_palette <- seq_gradient_pal(palette$low_color, palette$mid_color)(seq(0, 1, length.out = n_continuous/2))
+        high_palette <- seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0, 1, length.out = n_continuous/2))
+        cont_colors <- c(low_palette[-length(low_palette)], high_palette)
+        }
+        
       }
 
       val_scaled <- rescale(map$Value, to = c(1, n_continuous))
@@ -1104,8 +1140,8 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
       # Handle scale centering
       if (!is.na(scale_center)) {
         if(is.na(breaks[1])) {
-          stop("compute_breaks doesn't work with centered scale yet. Provide breaks.")
-        } 
+          stop("Please provide breaks. compute_breaks does not yet work with centered scales.")
+        }
         breaks <- c(-abs(breaks), abs(breaks)) + scale_center
         breaks <- sort(unique(breaks))
         if (logratio) {
@@ -1165,16 +1201,22 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
       
       n_bins <- length(breaks) - 1
       if (!is.null(palette$cs_palette)) {
-        cs_type <- if (!is.na(scale_center)) "diverging" else "sequential"
-      
+        cs_type <- if (is.na(scale_center)) "sequential" else "diverging"
+
         bin_palette <- get_cs_palette(n = n_bins, type = cs_type, name= palette$cs_palette)
       } else {
-        bin_palette <- seq_gradient_pal(
+        if (is.na(scale_center)) {
+          bin_palette <- seq_gradient_pal(
           palette$mid_color,
           palette$high_color
         )(seq(0, 1, length.out = n_bins))
+        } else {
+                  half <- length(breaks) / 2
+        low_palette <- seq_gradient_pal(palette$low_color, palette$mid_color)(seq(0, 1, length.out = half))
+        high_palette <- seq_gradient_pal(palette$mid_color, palette$high_color)(seq(0, 1, length.out = half))
+        bin_palette <- c(low_palette[-length(low_palette)], high_palette)
+        }
       }
-      
     }
   } else {
     stop("data_type must be either Type or Value, not both.")
@@ -1338,13 +1380,11 @@ create_map_inset <- function(data_3857, lon, lat, zoom_km, title) {
   # Buffer in meters
   crop_box <- st_buffer(center_point, dist = zoom_km * 1000) %>% st_bbox() 
   
-  # water_crop <- st_intersection(us_water, crop_box |> st_as_sfc())
-  # roads_crop <- st_intersection(us_roads, crop_box |> st_as_sfc())
+  # water_polygons <- get_osm_water_for_inset(crop_box)
   
   ggplot(data = data_3857) +
     geom_sf(aes(fill = Type), linewidth = 0.25, color = "white") + #very thin PUMA borders
-    # geom_sf(data = water_crop, color = "#80b1d3", size = 1.5) +
-    # geom_sf(data = roads_crop, color = "gray20", size = 0.4, linetype = "solid") +
+    # geom_sf(data = water_polygons,fill = "#e6f2f8",color = NA) +
     scale_fill_manual(
         values = bin_palette,
         na.value = palette$na_color,
@@ -1388,8 +1428,7 @@ build_inset_grid <- function(city_tbl, map_3857, palette, graphics_params, level
     "_", level, "_", idx, ".jpg"
   )
   
-  ggsave(filename = filepath, plot = grid, 
-         dpi = graphics_params$dpi, width = 10, height = 10)
+  ggsave(filename = filepath, plot = grid, dpi = graphics_params$dpi, width = 10, height = 10, device = ragg::agg_jpeg)
   system2("open", filepath)
   
   return(filepath)
