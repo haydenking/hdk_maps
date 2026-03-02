@@ -1,0 +1,170 @@
+---
+title: "SportsMaps"
+format: pdf
+editor: source
+---
+
+#NHL Player Birthplaces
+
+```{r}
+library(httr)
+library(jsonlite)
+library(dplyr)
+
+url <- "https://search.d3.nhle.com/api/v1/search/player?culture=en-us&limit=50000&q=*&active=true"
+
+players <- GET(url) |>
+  content("text", encoding = "UTF-8") |>
+  fromJSON(flatten = TRUE) |>
+  as_tibble()
+
+players <- players |>
+  transmute(
+    player_id = playerId,
+    name = name,
+    birth_city = birthCity,
+    birth_state = birthStateProvince,
+    birth_country = birthCountry
+  ) #some people on reddit complained that some players on here have never actually played in an NHL game, they just got drafted and teams have rights to them, might want to require 1 game played or something
+#counterpoint is that everyone who even got drafted is a very good hockey player and letting them in gives a bigger sample for seeing the geographic distribution...
+```
+
+```{r}
+players <- players |>
+  mutate(na = !is.na(birth_state)) #provinces are states in here
+
+other_countries = 1 - mean(players$na)
+other_countries_sum = sum(!players$na)
+
+players <- players |>
+  filter(na)
+```
+
+```{r}
+library(tidygeocoder)
+
+province_lookup <- c(
+  AB = "Alberta",
+  BC = "British Columbia",
+  MB = "Manitoba",
+  NB = "New Brunswick",
+  NL = "Newfoundland and Labrador",
+  NS = "Nova Scotia",
+  NT = "Northwest Territories",
+  NU = "Nunavut",
+  ON = "Ontario",
+  PE = "Prince Edward Island",
+  QC = "Quebec",
+  SK = "Saskatchewan",
+  YT = "Yukon"
+)
+
+players <- players |>
+  mutate(
+    birth_city = case_when(birth_city == "Grande Prarie" ~ "Grande Prairie",
+                           birth_city == "Longueil" ~ "Longueuil",
+                           birth_city == "Stouffvile" ~ "Whitchurch-Stouffville",
+                           birth_city == "St-Francois de Madaw" ~ "St-Francois de Madawaska",
+                           T ~ birth_city),
+    birth_state_abbr = birth_state,
+    birth_state = recode(birth_state, !!!province_lookup),
+    birth_country = recode(
+      birth_country,
+      CAN = "Canada", #without this it doesn't work on a lot of Canadian places
+      USA = "USA"),
+    birthplace = paste(birth_city, birth_state, birth_country, sep = ", ")
+  )
+
+players <- players |>
+  geocode(
+    city = birth_city,
+    state = birth_state,
+    country = birth_country,
+    method = "osm",
+    lat = latitude,
+    long = longitude
+  )
+players_missing = players |>
+  filter(is.na(latitude)) |>
+  select(-latitude, -longitude) |>
+  geocode(
+    address = birthplace, #use different method if the first one didn't work
+    method = "osm",
+    lat = latitude,
+    long = longitude
+  )
+
+players = players |>
+  filter(!is.na(latitude)) |>
+  bind_rows(players_missing)
+```
+
+```{r}
+players_sf = players_sf |>
+  rename(abbr = birth_state_abbr)
+
+ak = players_sf |>
+  filter(abbr == "AK")
+
+ak = shift_geometry(ak) #from tigris package
+ak$geometry = ak$geometry + c(230000, 0) #this breaks the CRS
+st_crs(ak) = st_crs(na_map)
+
+players_sf <- players_sf |>
+  filter(abbr != "AK") |>
+  st_transform(crs = st_crs(na_map)) |>
+  bind_rows(ak) |>
+  select(-abbr)
+```
+
+
+```{r}
+map(data = players_sf |> 
+      group_by(birth_city, birth_state_abbr) |>
+      summarize(Value = n()) |>
+      ungroup() |>
+      mutate(name = paste0(birth_city, ", ", birth_state_abbr)),
+  map = na_map |> filter(!abbr %in% c("PR")),
+  state_map = na_map |> filter(!abbr %in% c("PR")),
+  bubbles = T,
+  title = "Birthplaces of Active NHL Players",
+  source = "Sports",
+  numeric_type = "integer",
+  max_bubble_size = 15,
+  obs_units = "Cities",
+  caption_manual = paste0(round(100*other_countries, 2), "% born in other countries.\n", "Source: NHL API"),
+  palette = list(high_color = "blue")
+)
+
+map(data = players |>
+      group_by(birth_state_abbr) |>
+      summarize(Value = n()) |>
+      left_join(na_map |> st_drop_geometry() |> select(abbr, fips), by = join_by("birth_state_abbr" == "abbr")),
+  map = na_map,
+  state_map = na_map,
+  bubbles = F,
+  title = "Birthplaces of Active NHL Players",
+  source = "Sports",
+  numeric_type = "integer",
+  caption_manual = paste0(other_countries_sum, " born in other countries.\n", "Source: NHL API"),
+  palette = list(cs_palette = "Dark Mint")
+)
+
+map(data = players |>
+      group_by(birth_state_abbr) |>
+      summarize(Value = n()) |>
+      left_join(na_map |> st_drop_geometry() |> select(abbr, fips), by = join_by("birth_state_abbr" == "abbr")),
+  map = na_map,
+  state_map = na_map,
+  bubbles = F,
+  title = "Active NHL Player Birthplaces per Capita",
+  subtitle = "Per One Million Residents in 2000",
+  scale_factor = 1000000,
+  # cutoff_column = "pop00",
+  # inset_cutoff = 100000, #causes inset to be too wide :/
+  source = "Sports",
+  per = "pop00",
+  caption = "Source: NHL API",
+  palette = list(cs_palette = "Dark Mint")
+)
+```
