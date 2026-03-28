@@ -58,7 +58,6 @@ map <- function(data, map, state_map = NULL, title, source, years = NA, bubbles 
   
   #numeric_type can be "real" for real numbers, "integer" for counts, or "year" for years
   validate_numeric_type(numeric_type)
-  #rounding controls which decimal place to round to
   
   palette = set_palette(palette)
   
@@ -66,26 +65,7 @@ map <- function(data, map, state_map = NULL, title, source, years = NA, bubbles 
     shorten = shorten_func(rounding)
   } else{
     shorten <- function(x) x
-  }
-  
-  append_unit <- function(dollar, unit) {
-  function(x) {
-    sign <- ifelse(x < 0, "-", "")
-    paste0(sign, dollar, shorten(abs(x)), unit)
-    }
-  }
-  
-  #this works but parts of it may be unused, will streamline later
-  if (numeric_type == "integer") {
-    format_value <- function(x) paste0(formatC(x, format="f", digits=0), unit)
-    format_value_no_unit <- function(x) formatC(x, format="f", digits=0)
-} else if (numeric_type == "year") {
-    format_value <- function(x) as.character(round(x))
-    format_value_no_unit <- function(x) as.character(round(x))
-} else {
-    format_value <- append_unit(dollar, unit)
-    format_value_no_unit <- append_unit(dollar, "")
-}
+  } #rounding controls which decimal place to round to
   
   #Maps go in map folder, sub-folders named by source
   graphicspath = paste0("Maps/", source, "/")
@@ -110,8 +90,12 @@ map <- function(data, map, state_map = NULL, title, source, years = NA, bubbles 
   }
   cat("Level: ", level, "\n")
   #currently only state-level canada is implemented. might combine second level canadian subdivisions with US counties later but probably not since it'd be hard to find a dataset with data for both, could be useful if I have to spatial join data maybe
-  canada = if_else("BC" %in% state_map$abbr, T, F)
-  
+  if(!is.null(state_map)){
+    geo = geo_config(state_map)
+  } else {
+    geo = geo_config(map)
+  } #I think this will still fail for freefloating (no abbr column) and null state_map but I almost always use state_map so whatever
+  if(level == "puma") geo$inset_x_right = unit(0.99, "npc") #need as much space as possible for long PUMA names
   data_type = detect_data_type(data)
   
   if(is.na(scale_center) & "Value" %in% data_type){
@@ -194,16 +178,16 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
   }
 
   #user can supply units such as $/acre and they will display correctly
-  dollar <- ""
-  if (str_detect(unit, "\\$")) {
-    dollar <- "$"
-    unit <- str_remove(unit, "\\$")
-  } else if (unit == "%") {
-    map <- map |>
-      mutate(Value = 100 * Value)
-  } else if (!str_detect(unit, "$[/:]")) {#ratios and rates don't have the space before
-    unit <- paste0(" ", unit)
+  if (unit == "%") {
+      map <- map |>
+        mutate(Value = 100 * Value)
   }
+  u = parse_unit(unit)
+  format_fns = make_format_fns(numeric_type, u$dollar, u$display_unit, shorten)
+  format_value = format_fns$format_value
+  format_value_no_unit = format_fns$format_value_no_unit
+  format_value_label = format_fns$format_value_label #for state labels and colorbar
+  
   #I could probably remove a lot of this stuff and just handle it outside the mapping function
     if(per %in% c("capita", "capita_total", "year")){ #use capita_total to divide by population over a period of time but not year (ex. for cumulative % population changes over multiple years)
       if(is.na(years)[1]){
@@ -227,7 +211,7 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
     inset_text <- ""
   } else{
     obs_units = case_when(obs_units != "auto" ~ obs_units,
-                      level == "state" ~ if_else(canada, "Subdivisions", "States"), #wanted to use "States/Provinces" but didn't want to exclude the 3 Arctic territories
+                      level == "state" ~ geo$obs_units_state,
                       level == "county" ~ "Counties",
                       level == "puma" ~ "Public Use Microdata Areas",
                       level == "MSA" ~ "Counties/MSAs",
@@ -295,13 +279,11 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
     } else {
       graphicsparams = NULL
     }
-    choropleth <- choropleth_map(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, numeric_type, dollar, unit, format_value, format_value_no_unit, city_insets, graphicsparams, append_unit)
+    choropleth <- choropleth_map(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, numeric_type, format_value, format_value_no_unit, format_value_label, city_insets, graphicsparams, geo, rounding)
     plot = choropleth$plot
     breaks = choropleth$breaks
   }
-  scale_type = if(is.na(scale_center)) "sequential" else "diverging" #feels like some duplicated code handling scale types, will streamline at some point
-  
-  plot <- add_theme(plot, title, palette, subtitle, caption, inset_text, breaks, bubbles, max_bubble_size, tag, level, inset_box, scale_type, canada) #add experimental npc argument
+  plot <- add_theme(plot, title, palette, subtitle, caption, inset_text, breaks, bubbles, max_bubble_size, tag, level, inset_box, scale_center, geo) #add experimental npc argument
   
   filepath = paste0(graphicspath, str_remove_all(title, "[ '()<>%]"), source, "_", level, ".png")
   showtext_opts(dpi = dpi)
@@ -374,6 +356,18 @@ validate_numeric_type <- function(numeric_type) {
       call. = FALSE
     )
   }
+}
+parse_unit <- function(unit) {
+  dollar <- ""
+  
+  if (str_detect(unit, "\\$")) {
+    dollar <- "$"
+    unit <- str_remove(unit, "\\$")
+  }
+  # Ratios and rates (e.g. ":1", "/acre") don't get a leading space
+  display_unit <- if (unit == "" || str_detect(unit, "^[/:%]")) unit else paste0(" ", unit)
+  
+  list(dollar = dollar, display_unit = display_unit)
 }
 keep_columns <- function(df, cols_to_keep) { #because select() doesn't work if you give it columns that aren't in the data
   existing_cols <- intersect(cols_to_keep, colnames(df))
@@ -517,31 +511,31 @@ round_to_sigfigs <- function(value, sigfigs, method = c("floor", "ceiling")) {
   }
 }
 
-# shorten <- function(value) {
-#   sapply(value, function(v) {
-#     if (is.na(v)) return("")
-# 
-#     abs_val <- abs(v)
-# 
-#     # if (abs_val >= 1000 && abs_val < 10000) {
-#     #   return(comma_format()(round(v)))
-#     # }
-# 
-#     thresholds <- c(1e12, 1e9, 1e6, 1e3, 1)
-#     suffixes   <- c("t",   "b",  "m",  "k", "")
-# 
-#     for (i in seq_along(thresholds)) {
-#       if (abs_val >= thresholds[i]) {
-#         display_value <- v / thresholds[i]
-#         sigfigs = 3
-#         # sigfigs <- if (display_value >= 100) 3 else 2
-#         return(paste0(signif(display_value, sigfigs), suffixes[i]))
-#       }
-#     }
-# 
-#     return(as.character(signif(v, 2)))
-#   })
-# }
+make_format_fns <- function(numeric_type, dollar, display_unit, shorten) {
+  if (numeric_type == "integer") {
+    format_value         <- function(x) paste0(formatC(x, format = "f", digits = 0), display_unit)
+    format_value_no_unit <- function(x) formatC(x, format = "f", digits = 0)
+    format_value_label   <- function(x) formatC(x, format = "f", digits = 0) #no %s or $s to worry about
+  } else if (numeric_type == "year") {
+    format_value         <- function(x) as.character(round(x))
+    format_value_no_unit <- function(x) as.character(round(x))
+    format_value_label <- function(x) as.character(round(x))
+  } else {
+    format_value <- function(x) {
+      sign <- ifelse(x < 0, "-", "")
+      paste0(sign, dollar, shorten(abs(x)), display_unit)
+    }
+    format_value_no_unit <- function(x) {
+      sign <- ifelse(x < 0, "-", "")
+      paste0(sign, dollar, shorten(abs(x)))
+    }
+    format_value_label <- function(x) {
+      sign <- ifelse(x < 0, "-", "") #only show unit if it is % or $
+      paste0(sign, dollar, shorten(abs(x)), if_else(display_unit == "%", "%", ""))
+    }
+  }
+  list(format_value = format_value, format_value_no_unit = format_value_no_unit, format_value_label = format_value_label)
+}
 
 detect_level <- function(data, map) {
     case_when(
@@ -555,15 +549,41 @@ detect_level <- function(data, map) {
 )
 }
 
+geo_config <- function(map) {
+  if (any(c("BC", "ON", "QC") %in% map$abbr)) {
+    list(
+      scope = "usa_canada",
+      inset_x_right = unit(0.99, "npc"),
+      obs_units_state = "Subdivisions", #wanted to use "States/Provinces" but didn't want to exclude the 3 Arctic territories
+      state_label_size = 3.75 #was thinking 3.25 but maybe only for long labels
+    )
+  } else {
+    list(
+      scope = "usa",
+      inset_x_right = unit(0.79, "npc"),
+      obs_units_state = "States",
+      state_label_size = 4
+    )
+  }
+}
+
 make_caption <- function(source, years = NA, caption_manual = "") {
-  year_range <- if (!is.na(years[1])) paste0(min(years), "-", max(years)) else NULL
+  if (!is.na(years[1])) {
+      if (length(years) == 1) {
+        year_range = as.character(years)  # single year
+        s = ""
+      } else {
+        year_range = paste0(min(years), "-", max(years))  # range of years
+        s = "s"
+      }
+  } else {NULL}
   
-  base_caption <- switch(source,
-    "USDA"  = "Source: USDA Agriculture Census", #could remove "Agriculture Census" because I realized sometimes the data from the API is coming from the vegetable survey
-    "IRS"   = paste0("Source: ", year_range, " IRS Migration Data"),
-    "ACS"   = "Source: ACS Migration Data",
-    if (!is.null(year_range)) paste0("Years: ", year_range) else ""
+  source_labels <- list(
+    USDA = "Source: USDA Agriculture Census",
+    IRS  = paste0("Source: ", year_range, " IRS Migration Data"),
+    ACS  = "Source: ACS Migration Data"
   )
+  base_caption <- source_labels[[source]] %||% if (!is.null(year_range)) paste0("Year",s,": ", year_range) else ""
   
   # Ensure newline handling
   if (caption_manual != "" & base_caption != "") {
@@ -733,9 +753,14 @@ inset_data <- inset_data |>
   if(obs_units != ""){
     topbottom = if_else(str_detect(topbottom, " $"), topbottom , paste0(topbottom, " ")) # Make sure top/bottom ends in a space
   }
+  if(inset_cutoff > 0){
+    cutoff_column_display = str_remove(cutoff_column, "\\d{2}$")
+    cutoff_text = paste0(" (min ", shorten_func(1)(inset_cutoff), " ", cutoff_column_display, ")")
+  } else {
+    cutoff_text = ""
+  }
   
-  title_line =  paste0(topbottom, obs_units, 
-                      if_else(inset_cutoff > 0, paste0(" (min ", shorten(inset_cutoff), " ", cutoff_column, ")"), ""), 
+  title_line =  paste0(topbottom, obs_units, cutoff_text, 
                       ":\n")
   inset <- paste0(title_line, paste(inset_data$label, collapse = "\n"))
   
@@ -747,7 +772,7 @@ inset_data <- inset_data |>
 ```{r}
 #having issues with high max_bubble_size (> ~30), but that may be unavoidable due to space constraints
 #redo auto font size using grobwidth
-add_theme <- function(plot, title, palette, subtitle, caption, inset_text, breaks, bubbles, max_bubble_size, tag, level, inset_box, scale_type, canada) {
+add_theme <- function(plot, title, palette, subtitle, caption, inset_text, breaks, bubbles, max_bubble_size, tag, level, inset_box, scale_center, geo) {
   
   font = "notosans"
   
@@ -763,7 +788,7 @@ if (names(dev.cur()) == "null device") {
   negative_margin = -10
   relative_negative_margin = 0.012 #want to retire this but still necessary for pre-ggdraw stuff
   
-  subtitle_offset = 0.07*(title_font_size/36) # Vertical adjustment for subtitle
+  subtitle_offset = 0.05*(title_font_size/36) # Vertical adjustment for subtitle
   
   if (is.na(breaks[1]) & !bubbles) { #continuous color scale
   plot <- plot +
@@ -809,8 +834,7 @@ if (names(dev.cur()) == "null device") {
   }
   
   y_pos <- unit(0.01, "npc") #bottom of panel, used for caption and inset
-  x_box_right <- unit(if_else(canada | level == "puma", 0.99, 0.79), "npc") #right edge of inset box
-
+  # x_box_right <- unit(if_else(canada | level == "puma", 0.99, 0.79), "npc") #right edge of inset box
   
     tg <- textGrob(
       inset_text,
@@ -828,9 +852,8 @@ if (names(dev.cur()) == "null device") {
     box_width  <- text_width + 2 * padding
     box_height <- text_height + 2 * padding
 
-    x_box_left <- x_box_right - box_width / 2
-  
-# if (names(dev.cur()) == "null device") grDevices::pdf(NULL) #moved earlier
+    x_box <- geo$inset_x_right - box_width / 2
+
     
 title_height = 0.975
 suppressWarnings({
@@ -848,7 +871,7 @@ plot <- ggdraw(plot, clip = "on") +
 
   if (inset_box & inset_text != "") {
     inset_fill_color <- if (!is.null(palette$cs_palette)) {
-      if(scale_type == "diverging"){
+      if(!is.na(scale_center)){ #diverging
         diverging_hcl(3,palette$cs_palette)[2] #middle of 3 colors
       } else {
         sequential_hcl(3,palette$cs_palette)[2] #middle of 3 colors
@@ -860,7 +883,7 @@ plot <- ggdraw(plot, clip = "on") +
   plot <- plot +
     annotation_custom(
       roundrectGrob(
-        x = x_box_left,
+        x = x_box,
         y = y_pos,
         width = box_width,
         height = box_height,
@@ -878,7 +901,7 @@ plot <- ggdraw(plot, clip = "on") +
       annotation_custom(
         textGrob(
           inset_text,
-          x = x_box_right - box_width + padding, # x_box_left + padding??
+          x =  geo$inset_x_right - box_width + padding,
           y = y_pos + padding,
           just = c("left", "bottom"),
           gp = gpar(
@@ -908,7 +931,7 @@ plot <- plot +
   draw_label_box(
     if_else(tag, "@hdk_maps", ""),
     x = 0.5,
-    y = title_height - subtitle_offset - if_else(is.na(subtitle), 0, subtitle_offset / 2),
+    y = title_height - subtitle_offset - 0.03, #title_height - subtitle_offset - if_else(is.na(subtitle), 0, subtitle_offset / 2)
     fontfamily = "lekton",
     fontsize = 12,
     text_color = palette$title_color,
@@ -927,6 +950,43 @@ draw_label(
 ) + theme(panel.background = element_rect(fill = palette$background_color, color = NA))
 }) #need to suppress warnings due to postscript stuff
     return(plot)
+}
+
+draw_label_box <- function(label,x,y,fontfamily,fontsize,text_color,fill_color,padding = 0.35,r = 0.25,hjust = 0.5,vjust = 0.5,fontface = "plain") {
+
+  tg <- textGrob(
+    label,
+    gp = gpar(
+      fontsize = fontsize,
+      fontfamily = fontfamily,
+      fontface = fontface
+    )
+  )
+
+  rect <- draw_grob(
+    roundrectGrob(
+      x = x,
+      y = y,
+      width = grobWidth(tg) + unit(padding * 2, "lines"),
+      height = grobHeight(tg) + unit(padding * 2, "lines"),
+      r = unit(r, "lines"),
+      gp = gpar(fill = fill_color, col = NA)
+    )
+  )
+
+  text <- draw_label(
+    label,
+    x = x,
+    y = y,
+    hjust = hjust,
+    vjust = vjust,
+    fontfamily = fontfamily,
+    fontface = fontface,
+    size = fontsize,
+    color = text_color
+  )
+
+  list(rect, text)
 }
 ```
 
@@ -1084,7 +1144,7 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
 
 #choropleth_map
 ```{r}
-choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, numeric_type, dollar, unit, format_value, format_value_no_unit, city_insets, graphicsparams, append_unit) {
+choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, numeric_type, format_value, format_value_no_unit, format_value_label, city_insets, graphicsparams, geo, rounding) {
   
   continuous_scale <- FALSE
   
@@ -1264,7 +1324,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
     
     if (continuous_scale) {
       plot <- plot +
-        scale_fill_gradientn(colors = cont_colors, na.value = palette$na_color, labels = function(x) append_unit(dollar, if (unit == "%") "%" else "")(x)) +
+        scale_fill_gradientn(colors = cont_colors, na.value = palette$na_color, labels = format_value_label) +
         guides(fill = guide_colorbar(title = NULL))
     } else {
       plot <- plot +
@@ -1293,7 +1353,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
         text_color = if_else(brightness > 0.5, palette$text_color, "white")
       )
     
-    plot <- add_state_labels(plot, map, palette, dollar, unit, append_unit)
+    plot <- add_state_labels(plot, map, palette, format_value_label, geo, rounding)
   }
   
   if (!is.na(region)) {
@@ -1446,52 +1506,41 @@ filepaths <- imap(city_sets, ~build_inset_grid(.x, map_3857, palette, graphicspa
 #add_state_labels
 ```{r}
 #doesn't work for Categorical data yet
-add_state_labels <- function(plot, map, palette, dollar, unit, append_unit){
+add_state_labels <- function(plot, map, palette, format_value_label, geo, rounding){
   font = "notosans"
   
-  font_size = 4 #this is as big as the font can be without indiana and florida running into the borders a significant amount (the bold border don't help)
+  font_size = geo$state_label_size #this is as big as the font can be without indiana and florida running into the borders a significant amount (the bold border don't help)
   
+      adjustments <- tibble( #these adjustments are needed for labels but aren't good bubble locations
+      abbr  = c("NH",    "MA",   "CT",    "NJ",   "MD",   "RI", "DE", "IN",  "VT",    "DC",    "NY",   "KY",   "LA", "FL"),
+      x_adj = c(-10000,  70000, -35000,   10000,  25000,      0,   0,  5000, -20000,  460000,  20000,  30000,     0, 50000),
+      y_adj = c(120000, -20000, -20000,  -10000, -70000,  10000, -10000, 35000, 30000, -350000,     0, -10000, -20000, -120000)
+    ) #IN  was 5000, -35000 for 45 degree rotation, but only necessary for nchar == 5 I think
+    
+    repels <- tibble(
+      abbr    = c("DE", "HI",  "PR", "RI", "VT", "NJ", "CT",  "NH", "MA", "MD"),
+      x_nudge = c( 100,  -50,   100,  100, -100,  100,  100,  -100,  100,  100),
+      y_nudge = c( -50, -100,  -100,  -50,  100, -100,  -50,   100,  100, -100),
+      padding = c(   1, 1.25,     1, 0.75,    1,    1,    1,     1,    1,    2)
+    )
   
-    adjustments <- tibble( #these adjustments are needed for labels but aren't good bubble locations
-  abbr = c("NH", "MA", "CT", "NJ","MD", "RI", "DE", "IN", "VT", "DC", "NY", "KY", "LA", "FL"), # Indiana adjustment is just so it doesn't overlap with Illinois for long labels
-  x_adj = c(-10000, 70000, -35000, 10000, 25000, 0, 0, 5000, -20000, 460000, 20000, 30000, 0, 50000),
-  y_adj = c(120000, -20000, -20000, -10000, -70000, 10000, -10000, 35000, 30000, -350000, 0, -10000, -20000, -120000)
-)
+  repel_states <- c("HI", "PR")
+  external_label_states <- "DC"
+  eastern_seaboard = c("NH", "VT", "MA", "RI", "CT", "NJ", "DE", "MD")
   
-  repels <- tibble(
-    abbr = c("DE", "HI", "PR", "RI", "VT", "NJ", "CT", "NH", "MA", "MD"),
-    x_nudge = c(100, -50, 100, 100, -100, 100, 100, -100, 100, 100),
-    y_nudge = c(-50, -100, -100, -50, 100, -100, -50, 100, 100, -100),
-    padding = c(1, 1.25, 1, 0.75, 1, 1, 1, 1, 1, 2)
-  )
+  if(geo$scope == "usa"){#use repels for eastern seaboard
+    repel_states = c(repel_states, eastern_seaboard)
+    no_adjustment = c()
   
-#   adjustments <- tibble( #these adjustments are needed for labels but aren't good bubble locations
-#   abbr = c("MA", "NH", "CT", "NJ", "MD", "RI", "DE", "IN", "VT", "DC", "NY", "KY", "LA", "FL"), # Indiana adjustment is just so it doesn't overlap with Illinois for long labels
-#   x_adj = c(65000, -12000, -50000, 10000, 25000, 0, 0, 5000, -20000, 400000, 20000, 30000, 0, 50000),
-#   y_adj = c(-25000, 120000, -20000, -10000, -70000, -10000, -10000, 35000, 30000, -460000, 0, -10000, -20000, -120000)
-# )
-#   #MA was -35000, 8000 for not using repel text
-#   
-#   repels <- tibble(
-#     abbr = c("DE", "HI", "RI", "VT", "NJ", "CT", "NH", "MD", "PR"),
-#     x_nudge = c(100, 100, 500, -100, 100, 50, -100, 100, 0),
-#     y_nudge = c(-50, -100, -50, 100, -100, -100, 100, -100, -100),
-#     # padding = c(25, 25, 20, 25, 25, 30, 25, 15, 50) # for point.padding
-#     padding = c(1, 1, 1.1, 1, 1, 1.75, 1, 2, 1) # for box.padding
-#   ) #MA was 500 50 1.2 but it didn't work once I set expand to F
-  
-    if(unit == "%"){
-      format_value = append_unit(dollar, unit)
-      percent = "%"
-    } else {
-      format_value = append_unit(dollar, "")
-      percent = ""
-    }
+  } else if(geo$scope == "usa_canada") { #use stacked external labels
+    external_label_states <- c(external_label_states, eastern_seaboard, "NS", "PE")
+    no_adjustment = eastern_seaboard #it wouldn't break anything if they did get adjusted but I guess this is cleaner
+  }
   
 map <- map |>
-  mutate(label = format_value(Value),
-         label = case_when(Value < 0.01 & Value > 0 ~ paste0("<", dollar, "0.01", percent), 
-                           Value > -0.01 & Value < 0 ~ paste0(">-", dollar, "0.01", percent), #this will look kind of weird but idk what else to do to avoid false 0s or very long labels with signif()
+  mutate(label = format_value_label(Value),
+         label = case_when(Value < rounding & Value > 0 ~ paste0("<", format_value_label(rounding)),
+                           Value > -1*rounding & Value < 0 ~ paste0(">", format_value_label(-1*rounding)), #this will look kind of weird but idk what else to do to avoid false 0s or very long labels with signif()
                            T ~ label),
          nchar = nchar(label)) |>
   filter(!str_detect(label, "NA")) #remove NA labels
@@ -1504,49 +1553,42 @@ no_repel = map |>
          (nchar == 1 & abbr %in% c("MD", "CT"))) |> #could add NJ but I would need to adjust its label south
   pull(abbr) #I like this but also RI's repel doesn't look good when CT is taken away
 
-repels <- repels |>
-  filter(!abbr %in% no_repel)
-
+repel_states <- repel_states[!repel_states %in% no_repel]
+no_adjustment = c(no_adjustment, no_repel)
 adjustments <- adjustments |>
-  filter(!abbr %in% no_repel)
+  filter(!abbr %in% no_adjustment)
+
+repels <- repels |> filter(abbr %in% repel_states)
 
 map <- map |>
-  left_join(adjustments, by = "abbr") |> #I think all the adjustment are fine, maybe VT and NH should be dropped if it doesn't get repelled
+  left_join(adjustments, by = "abbr") |>
   mutate(
     x = coalesce(x + x_adj, x),
     y = coalesce(y + y_adj, y)
   ) |>
     select(-x_adj, -y_adj)
 
-wv = map |> filter(abbr == "WV")
-if(nrow(wv) == 1){
-  wv_label_length = nchar(wv$label)
-  if(wv_label_length > 3){ #4 characters is borderline ok
-    map <- map|>
-      filter(abbr != "WV")
-    plot <- plot +
-      geom_text(
-          data = wv,
-          aes(x = x, y = y, label = label, color = text_color),
-          size = font_size,
-          family = font,
-          fontface = "bold",
-          angle = 45
-        )
+  map_external_label <- map |> filter( abbr %in% external_label_states)
+  map   <- map |> filter(!abbr %in% external_label_states)
+  
+
+rotated_regions <- list(
+  list(abbr = "WV", angle =  45),
+  list(abbr = "NB", angle = -45)
+)
+
+# Pre-compute which ones actually need rotation based on label length
+needs_rotation <- map |>
+  filter(abbr %in% sapply(rotated_regions, `[[`, "abbr"),
+         nchar(label) > 3)
+
+map <- map |> filter(!abbr %in% needs_rotation$abbr)
+
+for (r in rotated_regions) {
+  if (r$abbr %in% needs_rotation$abbr) {
+    plot <- add_rotated_label(plot, needs_rotation, r$abbr, r$angle, font_size, font)
   }
 }
-# ma = map |> filter(abbr == "MA")
-# map <- map|>
-#   filter(abbr != "MA")
-# plot <- plot +
-#   geom_text(
-#       data = ma,
-#       aes(x = x, y = y, label = label, color = text_color),
-#       size = font_size*0.8,
-#       family = font,
-#       fontface = "bold",
-#       angle = 12.5
-#     )
 
 plot <- plot + 
     geom_text(data = map %>% filter(!(abbr %in% c("DC", repels$abbr))), 
@@ -1556,7 +1598,7 @@ plot <- plot +
        fontface = "bold") +
     scale_color_identity()
 
-for (i in 1:nrow(adjustments)) {
+for (i in 1:nrow(repels)) {
   row <- repels[i, ]
   
   plot <- plot +
@@ -1574,26 +1616,60 @@ for (i in 1:nrow(adjustments)) {
       force_pull = 0
       ) #if I did it all in one call the repels would repel each other which is a huge mess
 }
-      
-dc_row <- map |> filter(fips == "11", name == "District of Columbia")
-  if (nrow(dc_row) == 1) {
-    dc_row <- dc_row %>%
-      mutate(label = paste0("DC: ", label))
-    
-  plot <- plot +
-    geom_label(
-      data = dc_row,
-      aes(x = x, y = y, label = label),
-      size = font_size,
-      family = font,
-      fontface = "bold",
-      fill = dc_row$bin_color,
-      color = dc_row$text_color,
-      label.size = 1 #state border thickness
-    )
-  }
+
+plot <- add_external_labels(plot, map_external_label, external_label_states, font_size, font, palette, geo$scope)
       
       return(plot)
+}
+add_rotated_label <- function(plot, map, abbr, angle, font_size, font) {
+  region <- map |> filter(abbr == !!abbr)
+  if (nrow(region) != 1) return(plot)
+  
+  plot +
+    geom_text(
+      data = region,
+      aes(x = x, y = y, label = label, color = text_color),
+      size = font_size, family = font, fontface = "bold", angle = angle
+    )
+}
+add_external_labels <- function(plot, map, abbrs, font_size, font, palette, scope) {
+  x_offset = if_else(scope == "usa", -100000, 275000) #shouldn't have to use a negative x offset for scope == "usa", not sure what is going on
+  y_offset = if_else(scope == "usa", -50000, 0)
+  label_data <- map |>
+    filter(abbr %in% abbrs, !is.na(label)) |>
+    arrange(desc(y)) |>  # north to south
+    mutate(display_label = paste0(abbr, ": ", label))
+  
+  if (nrow(label_data) == 0) return(plot)
+  
+  # Fixed x column position to the right of the easternmost selected state
+  x_col <- max(label_data$x) + x_offset
+  
+  y_step <- 45000*font_size
+  y_positions <- max(label_data$y) + y_offset - (seq_along(label_data$abbr) - 1) * y_step
+  # y_positions <- seq(max(label_data$y), min(label_data$y) - 200000, length.out = nrow(label_data))
+  
+  label_data <- label_data |>
+    mutate(
+      x_label = x_col,
+      y_label = y_positions
+    )
+  
+  plot <- plot +
+    geom_label(
+      data = label_data,
+      aes(x = x_label, y = y_label, label = display_label),
+      size = font_size, #sorry for hardcoding
+      family = font,
+      fontface = "bold",
+      fill = label_data$bin_color,
+      color = label_data$text_color,
+      label.size = 1,
+      hjust = 0,
+      label.padding = unit(0.2, "lines")
+    )
+  
+  return(plot)
 }
 ```
 
