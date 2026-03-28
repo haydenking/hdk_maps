@@ -98,8 +98,14 @@ shift_akhi <- function(map) {
 
 #shift_pr
 ```{r}
-shift_pr <- function(map) {
-  PUERTO_RICO_SHIFT = c(1250000, 800000)
+shift_pr <- function(map, caribbean = F) {
+  #caribbean position is in the gulf of mexico, default is off the coast of georgia
+  if(caribbean){
+    PUERTO_RICO_SHIFT = c(0, 200000)
+  } else {
+    PUERTO_RICO_SHIFT = c(1250000, 800000)
+  }
+  
   
   puertorico = map |>
     filter(abbr == "PR")
@@ -125,8 +131,8 @@ construct_state_map <- function(state_maps = T, canada = F) {
     select(fips, abbr, name)
 
   state_map = shift_akhi(state_map)
-
-  shifted_pr = shift_pr(state_map)
+  
+  shifted_pr = shift_pr(state_map, canada) #put PR in caribbean for Canada map
   
   state_map = shifted_pr$map
   puertorico = shifted_pr$puertorico
@@ -141,6 +147,16 @@ construct_state_map <- function(state_maps = T, canada = F) {
   if(canada){
     #https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=lpr_000b21a_e.zip&k=%20%20%20130596&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lpr_000b21a_e.zip
     canada = st_read("shapefiles/canadian_provinces/lpr_000b16a_e.shp")
+    arctic <- canada |>
+      filter(PREABBR %in% c("Nvt.", "N.W.T.")) |>
+      st_cast("POLYGON") |>
+      mutate(area = st_area(geometry)) |>
+      group_by(PREABBR) |>
+      slice_max(area, n = 1) |> #keep just the mainland, remove arctic islands
+      ungroup()
+    canada <- canada |>
+      filter(!PREABBR %in% c("Nvt.", "N.W.T.")) |>
+      bind_rows(arctic)
     canada <- st_transform(canada, st_crs(state_map))
     canada <- st_simplify(canada, dTolerance = if_else(state_maps, 4000, 1000), preserveTopology = F)
     canada_crosswalk <- read.csv(text = "
@@ -176,9 +192,9 @@ construct_state_map <- function(state_maps = T, canada = F) {
            )
   
   adjustments <- tibble(
-    abbr = c("CA", "NJ", "MI", "MD", "LA", "FL", "HI", "ID", "WV", "ME", "VA"), #adjust centroids
-    x_adj = c(-40000, 10000,80000, -25000, -0,80000, 130000, 0, -20000, 25000, 30000),
-    y_adj = c(0, 0,-120000, 35000, -40000,0,-100000, -50000, 0, -10000, 0)
+    abbr = c("CA", "NJ", "MI", "MD", "LA", "FL", "HI", "ID", "WV", "ME", "VA", "NL"), #adjust centroids
+    x_adj = c(-40000, 10000,80000, -25000, -0,80000, 130000, 0, -20000, 25000, 30000, -150000),
+    y_adj = c(0, 0,-120000, 35000, -40000,0,-100000, -50000, 0, -10000, 0, 0)
   )
   
   state_map <- state_map |>
@@ -190,9 +206,15 @@ construct_state_map <- function(state_maps = T, canada = F) {
     select(-x_adj, -y_adj)
   
   
-  state_pops = read_csv("https://raw.githubusercontent.com/JoshData/historical-state-population-csv/refs/heads/primary/historical_state_population_by_year.csv")
+  state_pops = read_csv("https://raw.githubusercontent.com/JoshData/historical-state-population-csv/refs/heads/main/historical_state_population_by_year.csv")
+  #This source pulls FRED which pulls from the Census but FRED omits PR so I downloaded it
+  
+  pr_pops = read_csv("pr_pop.csv")
+  #https://www.census.gov/data/tables/time-series/demo/popest/2020s-total-puerto-rico.html
+  #PR population 2010-2025, used July 1 estimate for census years
   
   colnames(state_pops) = c("abbr", "year", "pop")
+  state_pops = rbind(state_pops, pr_pops)
   
   state_pops <- state_pops |>
     filter(year > 1999) |> #probably won't need anything earlier
@@ -200,8 +222,22 @@ construct_state_map <- function(state_maps = T, canada = F) {
     select(-year) |>
     pivot_wider(names_from = pop_name, values_from = pop)
   
+  if(canada){
+  #pulled canadian populations from then cleaned manually in excel https://www150.statcan.gc.ca/t1/tbl1/en/cv.action?pid=1710000501
+  canada_pops = read.csv("canada_pop00-25.csv") |>
+    mutate(pop = as.numeric(str_remove_all(pop, ",")),
+      pop_name = paste0("pop",sprintf("%02d", year-2000))) |>
+    select(-year) |>
+    pivot_wider(names_from = pop_name, values_from = pop) |>
+    left_join(canada_crosswalk |> select(-PRUID, -fips), by = "name") |>
+    select(-name)
+    
+  state_pops = canada_pops |>
+    bind_rows(state_pops)
+  }
+  
   state_map = left_join(state_map, state_pops, by = "abbr") |>
-    mutate(pop = pop20)
+    mutate(pop = pop20) #most reliable for US
   
   state_areas = read_csv("https://raw.githubusercontent.com/jakevdp/data-USstates/refs/heads/master/state-areas.csv")
   
@@ -568,7 +604,9 @@ Read in and Save maps
   state_map_largepr = st_read("shapefiles/state_map_largepr/state_map_largepr.shp")
   
   # na_map = construct_state_map(canada = T)
-  # still WIP
+  # st_write(na_map, "shapefiles/na_map/na_map.shp", delete_dsn = T)
+  na_map = st_read("shapefiles/na_map/na_map.shp")
+  # still maybe WIP, might be going too hard on st_simplify, need to work on making resolution look consistent between USA and CA
   
   #haven't updated MSA map in a while and don't like using it so omitting it here
   # MSA_map = st_read("shapefiles/MSA_map/MSA_map.shp")
