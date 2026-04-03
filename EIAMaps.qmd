@@ -1,0 +1,556 @@
+---
+title: "EIA_Maps"
+format: pdf
+editor: source
+---
+
+```{r}
+library(httr)
+library(jsonlite)
+library(tidyverse)
+api_key = "yYvlkoJ8WxUbPgbEpNtYUxKXhUeD2JQw3l7G5uOL"
+
+get_eia <- function(endpoint, api_key, params = list(), years = NULL) {
+  base <- paste0("https://api.eia.gov/v2/", endpoint)
+  if (is.null(years)) {
+    res <- GET(base, query = c(list(api_key = api_key), params))
+    json <- fromJSON(content(res, "text"), flatten = TRUE)
+    return(json$response$data)
+  }
+  results <- lapply(years, function(y) {
+    message("Pulling year: ", y)
+    query <- c(
+      list(api_key = api_key),
+      params,
+      list(start = y, end = y)
+    )
+    res <- GET(base, query = query)
+    json <- fromJSON(content(res, "text"), flatten = TRUE)
+    df <- json$response$data
+    # Safety: ensure year column exists
+    if (!"period" %in% names(df)) {
+      df$period <- y
+    }
+    Sys.sleep(0.2)
+    return(df)
+  })
+  out <- bind_rows(results)
+  return(out)
+}
+
+fips_key = state_map |>
+  st_drop_geometry() |>
+  select(abbr, fips)
+```
+
+#production by state and source over time
+```{r}
+gen_all <- get_eia(
+  "electricity/electric-power-operational-data/data/",
+  api_key,
+  list(
+  frequency = "annual",
+  `data[0]` = "generation",
+  `facets[sectorid][]` = "98" #Electric Power = 98, All Sectors = 99
+  ),
+  years = 2010:2024
+)
+
+# gen_types <- get_eia(
+#   "electricity/electric-power-operational-data/data/",
+#   api_key,
+#   list(
+#   frequency = "annual",
+#   `data[0]` = "generation",
+#   `facets[fueltypeid][]` = "ALL" #Electric Power
+#   ),
+#   years = 2024
+# )
+# 
+# #unique(gen_types$sectorDescription)
+```
+
+```{r}
+generation_by_type = gen_all |>
+  filter(fuelTypeDescription %in% c("all fuels", "renewable", "all coal products", "natural gas", "nuclear", "solar", "wind", "conventional hydroelectric") | (fueltypeid == "BIO")) |>
+    mutate(generation = as.numeric(generation),
+           period = as.numeric(period)) |>
+  pivot_wider(id_cols = c(period, location), names_from = fueltypeid, values_from = generation) |>
+  rename(abbr = location) |>
+  left_join(fips_key) |>
+  mutate(BIO = replace_na(BIO, 0),
+         COW = replace_na(COW, 0),
+         NUC = replace_na(NUC, 0),
+         NG = replace_na(NG, 0),
+         SUN = replace_na(SUN, 0),
+         WND = replace_na(WND, 0),
+         HYC = replace_na(HYC, 0),
+         REN = replace_na(REN, 0),
+         renewables_pct = REN/ALL,
+         biomass_pct = BIO/ALL,
+         nuclear_pct = NUC/ALL,
+         hydro_pct = HYC/ALL,
+         coal_pct = COW/ALL,
+         ng_pct = NG/ALL,
+         solar_pct = SUN/ALL,
+         wind_pct = WND/ALL,
+         clean_pct = renewables_pct + nuclear_pct - biomass_pct)
+#use "renewables" (REN) instead of "all renewables" (AOR) because the latter omits conventional hydropower (HYC), no idea why
+
+
+
+us_total = generation_by_type |>
+  filter(abbr == "US",
+         period == 2024) |>
+  pull(ALL)/1000
+
+subtitle_2024 = paste0("US: ", shorten_func()(us_total), " TWh")
+
+map(data = generation_by_type |> filter(period == 2024) |> mutate(Value = ALL/1000),
+  map = state_map,
+  state_map = state_map,
+  subtitle = subtitle_2024,
+  bubbles = F,
+  title = "Electricity Generation",
+  source = "EIA",
+  unit = "TWh",
+  year = 2024,
+  caption = "Source: Energy Information Administration",
+  palette = list(cs_palette = "Dark Mint")
+)
+
+
+subtitle_2024 = paste0("US: ", shorten_func()(1000000*us_total/sum(state_map$pop24)), " MWh")
+
+map(data = generation_by_type |> filter(period == 2024) |> mutate(Value = 1000*ALL),
+  map = state_map,
+  state_map = state_map,
+  subtitle = subtitle_2024,
+  bubbles = F,
+  title = "Electricity Generation Per Capita",
+  source = "EIA",
+  unit = "MWh",
+  year = 2024,
+  per = "pop24",
+  caption = "Source: Energy Information Administration",
+  palette = list(cs_palette = "Dark Mint")
+)
+
+
+pct_of_generation <- function(YEAR, power_type, col_name, cs = "Greens", scale_limits = c(NA, NA), display_year = T) {
+  
+  col_name <- sym(col_name)
+  pct = generation_by_type |>
+    filter(abbr == "US",
+           period == YEAR) |>
+    pull(!!col_name)*100
+  TITLE = paste0(power_type, " as a Percent of Electricity Generation")
+  if(display_year) {
+    TITLE = paste0(TITLE, " (", YEAR ,")")
+  }
+  
+  subtitle = paste0("US: ", round(pct), "%")
+  map(data = generation_by_type |> mutate(Value = !!col_name) |>
+        filter(period == YEAR),
+    map = state_map,
+    state_map = state_map,
+    subtitle = subtitle,
+    bubbles = F,
+    title = TITLE,
+    source = "EIA",
+    unit = "%",
+    year = YEAR,
+    scale_limits = scale_limits,
+    rounding = 1,
+    caption = "Source: Energy Information Administration\nUtility-scale generation only",
+    palette = list(cs_palette = cs)
+  )
+}
+
+
+img_list <- list()
+for(YEAR in 2010:2024) {
+  
+  pct_of_generation(YEAR, "Renewables", "renewables_pct", scale_limits = c(0,100))
+  TITLE = paste0("Renewables as a Percent of Electricity Generation (", YEAR ,")")
+  
+  img_list[[as.character(YEAR)]] <- image_read(paste0("Maps/EIA/", str_remove_all(TITLE, "[ '()<>%]"),"EIA_state.png"))
+}
+
+library(magick)
+frames <- image_join(img_list)  # join all frames
+
+# Duplicate the last frame, e.g., 3 extra times (adjust for desired pause)
+last_frame <- img_list[[length(img_list)]]
+frames <- c(frames, rep(last_frame, 5))
+
+# Animate
+gif <- image_animate(frames, fps = 1)
+
+# Save
+image_write(gif, "renewables.gif")
+
+#############################################################
+  
+img_list <- list()
+for(YEAR in 2010:2024) {
+  pct_of_generation(YEAR, "Clean Energy", "clean_pct", scale_limits = c(0,100))
+  TITLE = paste0("Clean Energy as a Percent of Electricity Generation (", YEAR ,")")
+  
+  img_list[[as.character(YEAR)]] <- image_read(paste0("Maps/EIA/", str_remove_all(TITLE, "[ '()<>%]"),"EIA_state.png"))
+}
+
+library(magick)
+frames <- image_join(img_list)  # join all frames
+
+# Duplicate the last frame, e.g., 3 extra times (adjust for desired pause)
+last_frame <- img_list[[length(img_list)]]
+frames <- c(frames, rep(last_frame, 5))
+
+# Animate
+gif <- image_animate(frames, fps = 1)
+
+# Save
+image_write(gif, "clean.gif")
+
+```
+
+```{r}
+pct_of_generation(2024, "Hydropower", "hydro_pct", "Blues 3", display_year = F)
+
+pct_of_generation(2024, "Wind Power", "wind_pct", "Greens", display_year = F)
+
+pct_of_generation(2024, "Coal Power", "coal_pct", "Grays", display_year = F)
+
+pct_of_generation(2024, "Solar Power", "solar_pct", "Oranges", scale_limits = c(0,28), display_year = F) #DC is messing up the scale
+
+pct_of_generation(2024, "Nuclear Power", "nuclear_pct", "ag_GrnYl", display_year = F)
+
+pct_of_generation(2024, "Natural Gas", "ng_pct", "YlOrBr", display_year = F)
+
+```
+
+
+#residential electricity consumption
+```{r}
+cons <- get_eia(
+  "electricity/retail-sales/data/",
+  api_key,
+  list(
+    frequency = "annual",
+    `data[0]` = "sales"
+  ),
+  years = 2010:2024
+) #retail sales
+```
+
+```{r}
+#unit = GWh
+consumption_data = cons |>
+  mutate(period = as.numeric(period),
+         sales = as.numeric(sales)) |>
+  rename(abbr = stateid) |>
+  left_join(fips_key)
+
+num = consumption_data |>
+  filter(abbr == "US",
+         period == 2024) |>
+  pull(sales)
+
+num = (num*1000)/sum(state_map$pop24)
+
+subtitle_2024 = paste0("US: ", round(num, 1), " MWh")
+
+map(data = consumption_data |> mutate(Value = sales*1000) |> filter(period == 2024, sectorid == "ALL"),
+  map = state_map,
+  state_map = state_map,
+  subtitle = subtitle_2024,
+  per = "pop24",
+  bubbles = F,
+  title = "Residential Electricity Consumption Per Capita",
+  source = "EIA",
+  unit = "MWh",
+  year = 2024,
+  inset_style = "split",
+  caption = "Source: Energy Information Administration",
+  palette = list(cs_palette = "YlOrRd")
+)
+```
+
+#net electricity generation
+```{r}
+#investigate why Hawaii only generates 96%  of its consumption - seems impossible - is rooftop solar undercounted?
+net_generation = consumption_data |>
+  filter(sectorid == "ALL") |>
+  rename(consumption = sales) |>
+  left_join(generation_by_type |> select(ALL, abbr, period), by = join_by(abbr == abbr, period == period)) |>
+  mutate(net_generation = (ALL - consumption)/1000) #GWh -> TWh
+
+map(data = net_generation |> filter(period == 2024) |> mutate(Value = net_generation),
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = "Net Electricity Balance",
+  subtitle = "Utility-Scale Generation - Retail Power Sales",
+  source = "EIA",
+  unit = "TWh",
+  year = 2024,
+  scale_center = 0,
+  inset_style = "split",
+  inset_labels = list(top = "Top /n/ Biggest Exporting", bottom = "Top /n/ Biggest Importing"),
+  caption = "Source: Energy Information Administration\nExcludes most distributed generation (e.g. rooftop solar)",
+  palette = list(cs_palette = "Purple-Green")
+)
+
+map(data = net_generation |> filter(period == 2024) |> mutate(Value = net_generation*1000000),
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = "Net Electricity Balance Per Capita",
+  subtitle = "Utility-Scale Generation - Retail Power Sales",
+  source = "EIA",
+  unit = "MWh",
+  per = "pop24",
+  year = 2024,
+  scale_center = 0,
+  inset_style = "split",
+  inset_labels = list(top = "Top /n/ Exporting", bottom = "Top /n/ Importing"),
+  caption = "Source: Energy Information Administration\nExcludes most distributed generation (e.g. rooftop solar)",
+  palette = list(cs_palette = "Purple-Green")
+)
+
+map(data = net_generation |> filter(period == 2024) |> mutate(Value = ALL/consumption),
+  map = state_map,
+  state_map = state_map,
+  bubbles = F,
+  title = "Net Electricity Balance",
+  subtitle = "Utility-Scale Generation / Retail Power Sales",
+  source = "EIA",
+  year = 2024,
+  scale_center = 100,
+  unit = "%",
+  inset_style = "split",
+  rounding = 1,
+  inset_labels = list(top = "Top /n/ Exporting", bottom = "Top /n/ Importing"),
+  caption = "Source: Energy Information Administration\nExcludes most distributed generation (e.g. rooftop solar)",
+  palette = list(cs_palette = "Purple-Green")
+)
+```
+
+
+#residential natural gas consumption
+
+```{r}
+gas_res <- get_eia(
+  "natural-gas/consumption/data/",
+  api_key,
+  params = list(
+    frequency = "annual",
+    `data[0]` = "value",
+    `facets[process][]` = "VRS"
+  ),
+  years = c(2010, 2024)
+) #can't figure out the correct API call here
+```
+
+
+#residential electricity prices
+```{r}
+res_price <- get_eia(
+  "electricity/retail-sales/data/",
+  api_key,
+  list(
+    frequency = "annual",
+    `data[0]` = "price",
+    `facets[sectorid][]` = "RES",
+    start = "2024",
+    end = "2024"
+  )
+)
+
+res_price_data = res_price |>
+  mutate(price = as.numeric(price)/100) |>
+  rename(abbr = stateid) |>
+  left_join(fips_key)
+
+num = res_price_data |>
+  filter(abbr == "US") |>
+  pull(price)
+
+subtitle_2024 = paste0("US: $", round(num, 2), " /KWh")
+
+map(data = res_price_data |> mutate(Value = price),
+  map = state_map,
+  state_map = state_map,
+  subtitle = subtitle_2024,
+  bubbles = F,
+  title = "Residential Electricity Price",
+  source = "EIA",
+  unit = "$/KWh",
+  year = 2024,
+  rounding = 0.01,
+  inset_style = "split",
+  caption = "Source: Energy Information Administration",
+  palette = list(cs_palette = "Dark Mint")
+)
+```
+
+#carbon emissions by state
+```{r}
+#use SEDS instead for more recent data, this is deprecated
+co2 <- get_eia(
+  "co2-emissions/co2-emissions-aggregates/data/",
+  api_key,
+  list(
+    frequency = "annual",
+    `data[0]` = "value"
+  ),
+  years = 2022
+) #map per capita and per GDP
+```
+
+```{r}
+emissions_data = co2 |>
+    mutate(Value = 1000000000*as.numeric(value)) |>
+  filter(`sector-name` == "Total carbon dioxide emissions from all sectors",
+         `fuel-name` == "All Fuels") |>
+  rename(abbr = stateId) |>
+  left_join(fips_key)
+
+num = emissions_data |>
+  filter(abbr == "US") |>
+  pull(Value)
+
+us_pop = state_map |> st_drop_geometry() |>
+  filter(abbr != "PR") |>
+  summarize(pop = sum(pop22)) |>
+  pull(pop)
+
+subtitle = paste0("US: ", shorten_func()(num/us_pop), " kg co2")
+
+map(data = emissions_data,
+  map = state_map,
+  state_map = state_map,
+  subtitle = subtitle,
+  bubbles = F,
+  title = "CO2 Emissions Per Capita",
+  source = "EIA",
+  unit = "kg co2",
+  per = "pop22",
+  year = 2022,
+  inset_style = "split",
+  caption = "Source: Energy Information Administration",
+  palette = list(cs_palette = "Dark Mint")
+)
+```
+
+
+#coal production
+```{r}
+coal_prod <- get_eia(
+  "coal/aggregate-production/data/",
+  api_key,
+  list(
+    frequency = "annual",
+    `data[0]` = "production"
+  ),
+  years = 2010:2024
+)
+```
+
+```{r}
+coal_production = coal_prod |>
+  mutate(period = as.numeric(period),
+         production = 2000*as.numeric(production)) |>
+  filter(coalRankDescription == "All",
+         mineTypeId == "ALL",
+         mineTypeDescription == "All") |>
+  rename(abbr = stateRegionId) |>
+  left_join(fips_key)
+
+
+
+map(data = coal_production |> mutate(Value = production) |> filter(period == 2024),
+  map = state_map,
+  state_map = state_map,
+  na_to_0 = T, #need to check that omitted states are actually 0s and not just censoring
+  bubbles = F,
+  title = "Coal Production",
+  source = "EIA",
+  unit = "lbs",
+  year = 2024,
+  caption = "Source: Energy Information Administration",
+  palette = list(high_color = "black",
+                 low_color = "white")
+)
+
+img_list <- list()
+for(YEAR in 2010:2024) {
+  TITLE = paste0("Coal Production (", YEAR ,")")
+  
+  num = coal_production |>
+    filter(abbr == "US",
+           period == YEAR) |>
+    pull(production)
+  
+  subtitle = paste0("US: ", shorten_func()(num), " lbs")
+  
+  map(data = coal_production |> mutate(Value = production) |> filter(period == YEAR),
+  map = state_map,
+  state_map = state_map,
+  subtitle = subtitle,
+  na_to_0 = T, #need to check that omitted states are actually 0s and not just censoring
+  bubbles = F,
+  title = TITLE,
+  source = "EIA",
+  unit = "lbs",
+  year = YEAR,
+  caption = "Source: Energy Information Administration",
+  palette = list(cs_palette = "Grays")
+)
+  
+  img_list[[as.character(YEAR)]] <- image_read(paste0("Maps/EIA/", str_remove_all(TITLE, "[ '()<>%]"),"EIA_state.png"))
+}
+
+library(magick)
+frames <- image_join(img_list)  # join all frames
+
+# Duplicate the last frame, e.g., 3 extra times (adjust for desired pause)
+last_frame <- img_list[[length(img_list)]]
+frames <- c(frames, rep(last_frame, 5))
+
+# Animate
+gif <- image_animate(frames, fps = 1/2)
+
+# Save
+image_write(gif, "coal.gif")
+```
+
+#natural gas production
+```{r}
+#broken call
+gas_prod <- get_eia(
+  "natural-gas/production/data/",
+  api_key,
+  list(
+    frequency = "annual",
+    `data[0]` = "gross"
+  ),
+  years = c(2014, 2024)
+)
+```
+
+#oil production
+```{r}
+oil_prod <- get_eia(
+  "petroleum/crude-oil-production/data/",
+  api_key,
+  list(
+    frequency = "annual",
+    `data[0]` = "production"
+  ),
+  years = 2010:2024
+)
+```
+
+#distributed vs large scale solar
