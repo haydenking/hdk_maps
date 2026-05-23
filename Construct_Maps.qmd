@@ -20,6 +20,19 @@ library(sf)
 library(tigris)
 ```
 
+```{r}
+# state_key <- states(cb = TRUE, year = 2020) |>
+#   st_drop_geometry() |>
+#     rename(fips = GEOID,
+#            abbr = STUSPS,
+#            name = NAME) |>
+#     filter(!abbr %in% c("GU", "MP", "VI", "AS")) |>
+#     select(fips, abbr, name)
+# 
+# write_csv(state_key, "state_key.csv")
+```
+These first 3 functions are necessary for dealing with AK, HI, and PR and must be loaded in for some other functions.
+
 #scale_sfc
 For scaling Puerto Rico
 ```{r}
@@ -118,6 +131,7 @@ shift_pr <- function(map, caribbean = F) {
   return(list("map" = map, "puertorico" = puertorico))
 }
 ```
+
 
 #construct_state_map
 ```{r}
@@ -577,6 +591,99 @@ construct_puma_map <- function(){
 }
 ```
 
+
+#construct_sd_map
+School Districts
+```{r}
+#it works but with two problems: it is a bit too HD and it looks weird with state boundaries (maybe I can get a more HD state boundary shp)
+#there isn't SD-specific logic in map() (it think they're PUMAs, which is sort of ok for now)
+#overlapping districts because not all are unified - is there some way to merge?
+construct_sd_map <- function(){
+  state_key = read_csv("state_key.csv")
+  
+  #it came with the (1) lol
+  #https://nces.ed.gov/programs/edge/Geographic/DistrictBoundaries
+  sd_map = st_read("shapefiles/EDGE_SCHOOLDISTRICT_TL25_SY2425 (1)/EDGE_SCHOOLDISTRICT_TL25_SY2425.shp") |>
+    mutate(type = case_when(!is.na(ELSDLEA) ~ "elementary",
+                          !is.na(SCSDLEA) ~ "secondary",
+                          !is.na(UNSDLEA) ~ "unified",
+                          !is.na(SDADMLEA) ~ "supervisory")) |>
+    rename(name = NAME,
+           fips = GEOID) |>
+    filter(!STATEFP %in% c(60, 66, 69, 78)) |> #remove territories besides PR
+    left_join(state_key |> select(-name), by = join_by(STATEFP == fips))
+  
+  #I am concerned about "School District Not Specified" in Wyoming
+  
+  sd_map = st_make_valid(sd_map) #sf crashes finding intersections because the geometries are weird or something but you can do this
+  
+  elem_sf <- sd_map |> filter(type == "elementary")
+  sec_sf  <- sd_map |> filter(type == "secondary")
+  uni_sf  <- sd_map |> filter(type == "unified")
+  
+  # pairs <- st_intersection(
+  #   elem_sf |> select(elem_id = ELSDLEA),
+  #   sec_sf  |> select(sec_id  = SCSDLEA)
+  # ) |>
+  #   mutate(overlap_area = as.numeric(st_area(geometry))) |>
+  #   group_by(elem_id) |>
+  #   slice_max(overlap_area, n = 1, with_ties = FALSE) |>
+  #   ungroup() |>
+  #   st_drop_geometry()
+  
+  pairs_test <- st_intersection(
+    elem_sf |> select(elem_id = ELSDLEA),
+    sec_sf  |> select(sec_id  = SCSDLEA)
+  ) |>
+    mutate(overlap_area = as.numeric(st_area(geometry))) |>
+    st_drop_geometry()
+  
+  pairs_test |>
+    count(sec_id) |>
+    filter(n > 1)
+  
+  pair_crosswalk <- pairs |>
+    mutate(
+      map_id = paste0("P_", elem_id, "_", sec_id),
+      uni_id = NA_character_,
+      paired = "paired"
+    )
+  
+  # Elementary: use its own ID unless paired
+  elem_sf <- elem_sf |>
+    left_join(pair_crosswalk, by = join_by("ELSDLEA" == "elem_id")) |>
+    mutate(pair_id = if_else(!is.na(map_id), map_id, paste0("E_", ELSDLEA)))
+  
+  # Secondary: same idea
+  sec_sf <- sec_sf |>
+    left_join(pair_crosswalk, by = join_by("SCSDLEA" == "sec_id")) |>
+    mutate(pair_id = if_else(!is.na(map_id), map_id, paste0("S_", SCSDLEA)))
+  
+  uni_sf <- uni_sf |>
+    mutate(pair_id = paste0("U_", UNSDLEA))
+  
+  sd_map <- bind_rows(elem_sf, sec_sf, uni_sf)
+  
+  sd_map = shift_akhi(sd_map)
+  
+  shifted_pr = shift_pr(sd_map)
+  
+  sd_map = shifted_pr$map
+  puertorico = shifted_pr$puertorico
+  
+  puertorico$geometry = scale_sfc(puertorico$geometry, st_coordinates(st_centroid(puertorico)), 0.5)
+  st_crs(puertorico) <- st_crs(sd_map)
+  
+  sd_map = rbind(sd_map, puertorico)
+
+  # sd_map <- sd_map |>
+  #   select(type, name, abbr, fips , LOGRADE, HIGRADE)
+  
+  return(sd_map)
+}
+```
+
+
 Read in and Save maps
 ```{r}
   # county_map = construct_county_map()
@@ -607,6 +714,10 @@ Read in and Save maps
   # st_write(na_map, "shapefiles/na_map/na_map.shp", delete_dsn = T)
   na_map = st_read("shapefiles/na_map/na_map.shp")
   # still maybe WIP, might be going too hard on st_simplify, need to work on making resolution look consistent between USA and CA
+  
+  # sd_map = construct_sd_map()
+  # st_write(sd_map, "shapefiles/sd_map/sd_map.shp", delete_dsn = T)
+  sd_map = st_read("shapefiles/sd_map/sd_map.shp")
   
   #haven't updated MSA map in a while and don't like using it so omitting it here
   # MSA_map = st_read("shapefiles/MSA_map/MSA_map.shp")
