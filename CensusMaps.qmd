@@ -1403,3 +1403,129 @@ map(data = median_age |> filter(nchar(fips) == 2) |>
 
 ```
 
+#Air Conditioning
+```{r}
+#https://www.census.gov/data/experimental-data-products/lace.html
+
+ac_county = read_csv("Data/Census/LACE_23_County.csv") |>
+  mutate(Value = AC_PE/100,
+         fips = paste0(STATE, COUNTY))
+
+ac_state = read_csv("Data/Census/LACE_23_State.csv") |>
+  mutate(Value = AC_PE/100,
+         fips = STATE)
+
+#national data for subtitle
+ac_national = read_csv("Data/Census/LACE_23_National.csv") |>
+  pull(AC_PE)
+
+ac_national_subtitle = paste0("US: ", round(ac_national,2), "%")
+
+
+map(data = ac_county,
+    map = county_map_planningregions,
+    state_map = state_map_largepr,
+    subtitle = ac_national_subtitle,
+    bubbles = F,
+    title = "Estimated Percent of Housing Units with AC",
+    unit = "%",
+    source = "Census",
+    year = 2023,
+    breaks = c(10, 30, 50, 70, 90, 95),
+    caption_manual = "US Census Bureau Local Air Conditioning Estimates",
+    inset_style = "hidden", #all AK
+    palette = list(cs_palette = "BurgYl")
+)
+
+map(data = ac_state,
+    map = state_map,
+    state_map = state_map,
+    subtitle = ac_national_subtitle,
+    bubbles = F,
+    title = "Estimated Percent of Housing Units with AC",
+    unit = "%",
+    source = "Census",
+    year = 2023,
+    caption_manual = "US Census Bureau Local Air Conditioning Estimates",
+    inset_style = "hidden", #ties in inset
+    breaks = c(70, 85, 95, 98, 99), #AK breaks a continuous scale
+    palette = list(cs_palette = "BurgYl")
+)
+```
+
+```{r}
+#https://www.census.gov/data/experimental-data-products/small-area-rodent-signs.html
+#This rodent estimate is a model-based estimate of rodent sightings at the county level, specifically within occupied housing units. 
+
+library(readxl)
+
+rodents = read_xlsx("Data/Census/rodent19.xlsx") |>
+mutate(units = as.numeric(`Housing Unit Estimate`),
+         rodents = as.numeric(`Rodent Estimate`))
+
+rodents_county = rodents |>
+  mutate(fips = paste0(`State Fips Code`, `County Fips Code`),
+         Value = rodents/units)
+
+rodents_state = rodents |>
+  rename(fips = `State Fips Code`) |>
+  group_by(fips) |>
+  summarize(units = sum(units),
+            rodents = sum(rodents)) |>
+  mutate(Value = rodents/units)
+
+national = rodents |>
+    summarize(units = sum(units),
+            rodents = sum(rodents)) |>
+  mutate(Value = rodents/units) |>
+  pull(Value)
+
+rodents_subtitle = paste0("US: ", round(national*100, 1), "%")
+
+#data was from before valdez-cordova split into chugach and copper river. I make so few maps with old data that I'm not adding this functionality in Construct_Maps.qmd
+county_map_valdez_cordova = county_map |>
+  mutate(fips = if_else(fips %in% c("02063", "02066"), "02261", fips),
+         name = if_else(fips %in% c("02063", "02066"), "Valdez-Cordova Census Area, AK", name),
+         county = if_else(fips %in% c("02063", "02066"), "Valdez-Cordova Census Area", county)) |>
+  group_by(fips, name, abbr, state) |>
+  summarize(geometry = st_union(geometry),
+            x = mean(x),
+            y = mean(y),
+            sqmi = sum(sqmi)) |>
+  ungroup() #inset breaks if you don't do this
+
+
+map(data = rodents_county,
+    map = county_map_valdez_cordova,
+    state_map = state_map_largepr,
+    subtitle = rodents_subtitle,
+    bubbles = F,
+    title = "Home Rodent Sightings in the Past Year",
+    unit = "%",
+    source = "Census",
+    year = 2019,
+    inset_cutoff = 10000,
+    cutoff_column = "units",
+    breaks = c(10, 15, 20, 25, 30),
+    caption_manual = "Source: US Census Bureau model-based estimates",
+    inset_style = "split",
+    palette = list(cs_palette = "Lajolla")
+)
+
+map(data = rodents_state,
+    map = state_map,
+    state_map = state_map,
+    subtitle = rodents_subtitle,
+    bubbles = F,
+    title = "Home Rodent Sightings in the Past Year",
+    unit = "%",
+    source = "Census",
+    year = 2019,
+    caption_manual = "Source: US Census Bureau model-based estimates",
+    inset_style = "split",
+    palette = list(cs_palette = "Lajolla")
+)
+
+
+
+```
