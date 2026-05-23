@@ -54,7 +54,7 @@ dir.create(osm_cache_dir, showWarnings = FALSE)
 
 ###map
 ```{r}
-map <- function(data, map, state_map = NULL, title, source, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, palette = list(), inset_cutoff = -Inf, cutoff_column = "Value", breaks = NA, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T,  rounding = 0.1, numeric_type = "real", city_insets = F) {
+map <- function(data, map, state_map = NULL, title, source, years = NA, bubbles = T, unit = "", per = "", max_bubble_size = NA, continental = F, borders = F, palette = list(), inset_cutoff = -Inf, cutoff_column = "Value", breaks = NA, caption_manual = "", labels_manual = NA, inset_style = "top", subtitle = NA, region_fips = NA, merge_MSAs = F, scale_center = NA, scale_factor = 1, logratio = F, dpi = 300, show_endpoints = F, hide_values = F, tag = T, plusminus_labels = list(pos = "Positive", neg = "Negative"), inset_labels = list(top = "Top /n/", bottom = "Bottom /n/"), obs_units = "auto", na_label = "No Data", inset_box = T,  rounding = 0.1, numeric_type = "real", city_insets = F, na_to_0 = F, scale_limits = c(NA, NA)) {
   
   #numeric_type can be "real" for real numbers, "integer" for counts, or "year" for years
   validate_numeric_type(numeric_type)
@@ -161,6 +161,10 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
   }
   
     if("Value" %in% data_type){
+      if(na_to_0){
+        map <- map |>
+          mutate(Value = replace_na(Value, 0))
+      }
     map <- map |>
       mutate(cutoff = !!sym(cutoff_column))
     }
@@ -279,7 +283,7 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
     } else {
       graphicsparams = NULL
     }
-    choropleth <- choropleth_map(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, numeric_type, format_value, format_value_no_unit, format_value_label, city_insets, graphicsparams, geo, rounding)
+    choropleth <- choropleth_map(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, numeric_type, format_value, format_value_no_unit, format_value_label, city_insets, graphicsparams, geo, rounding, scale_limits)
     plot = choropleth$plot
     breaks = choropleth$breaks
   }
@@ -294,7 +298,7 @@ caption = make_caption(source, years, caption_manual) #might want to overhaul ho
 
 #color functions
 ```{r}
-get_cs_palette <- function(n, type, name, reverse = TRUE) { #I prefer dark = high, light = low so I reverse
+get_cs_palette <- function(n, type, name, reverse = F) {
   stopifnot(type %in% c("sequential", "diverging"))
   
   cat(type)
@@ -465,7 +469,7 @@ shorten_func <- function(rounding = 0.1) {
       }
 
       # values < 1, not covered above
-      if (decimals > 0) {
+      if ((decimals > 0) & (x != 0)) {
         return(formatC(x, format = "f", digits = decimals, drop0trailing = FALSE))
       } else {
         return(formatC(x, format = "f", digits = 0, drop0trailing = TRUE))
@@ -538,7 +542,9 @@ make_format_fns <- function(numeric_type, dollar, display_unit, shorten) {
 }
 
 detect_level <- function(data, map) {
-    case_when(
+  data = data |>
+    filter(!is.na(fips))
+  case_when(
   "fips" %in% names(data) & all(nchar(data$fips) == 2) ~ "state",
   "fips" %in% names(data) & all(nchar(data$fips) == 5) ~ "county",
   "fips" %in% names(data) & all(nchar(data$fips) == 7) ~ "puma",
@@ -567,7 +573,7 @@ geo_config <- function(map) {
   }
 }
 
-make_caption <- function(source, years = NA, caption_manual = "") {
+make_caption <- function(source, years, caption_manual = "") {
   if (!is.na(years[1])) {
       if (length(years) == 1) {
         year_range = as.character(years)  # single year
@@ -576,14 +582,15 @@ make_caption <- function(source, years = NA, caption_manual = "") {
         year_range = paste0(min(years), "-", max(years))  # range of years
         s = "s"
       }
-  } else {NULL}
+  } else {year_range = NA}
   
   source_labels <- list(
     USDA = "Source: USDA Agriculture Census",
     IRS  = paste0("Source: ", year_range, " IRS Migration Data"),
-    ACS  = "Source: ACS Migration Data"
+    ACS  = "Source: ACS Migration Data",
+    IPUMS = paste0("Source: ", year_range, " American Community Survey Microdata")
   )
-  base_caption <- source_labels[[source]] %||% if (!is.null(year_range)) paste0("Year",s,": ", year_range) else ""
+  base_caption <- source_labels[[source]] %||% if (!is.na(year_range)) paste0("Year",s,": ", year_range) else ""
   
   # Ensure newline handling
   if (caption_manual != "" & base_caption != "") {
@@ -681,7 +688,8 @@ set_palette <- function(user_palette) {
     "text_color" = "#363c45",
     "highlight_color" = "steelblue",
     "na_color" = "gray85", #gray80,
-    "cs_palette" = NULL
+    "cs_palette" = NULL,
+    "reverse_cs_palette" = F  #I prefer dark = high, light = low so I reverse by default
     #https://cran.r-project.org/web/packages/colorspace/vignettes/colorspace.html
   )
   return(modifyList(default_palette, user_palette)) #overwrites defaults
@@ -732,7 +740,7 @@ create_inset <- function(map, level, style = c("top", "bottom"), n, inset_cutoff
     filter(rank_value <= last_rank_value)
   if(nrow(inset_data) > n){
     n = nrow(inset_data)
-    message("Expanding inset to ", n, " observations due to ties.\n")
+    cat("Expanding inset to ", n, " observations due to ties.\n")
   }
   
 inset_data <- inset_data |>
@@ -770,6 +778,7 @@ inset_data <- inset_data |>
 
 #add_theme
 ```{r}
+#add option to subtitle to just be numeric and it gets automatically formatted with units
 #having issues with high max_bubble_size (> ~30), but that may be unavoidable due to space constraints
 #redo auto font size using grobwidth
 add_theme <- function(plot, title, palette, subtitle, caption, inset_text, breaks, bubbles, max_bubble_size, tag, level, inset_box, scale_center, geo) {
@@ -801,7 +810,7 @@ if (names(dev.cur()) == "null device") {
         label.position = "bottom",
         title.position = "top",
         frame.colour = "black",
-        frame.linewidth = 1,
+        frame.linewidth = 1
       )
     )
 }
@@ -1144,7 +1153,7 @@ bubble_map <- function(map, state_map, level, max_bubble_size, palette, borders,
 
 #choropleth_map
 ```{r}
-choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, numeric_type, format_value, format_value_no_unit, format_value_label, city_insets, graphicsparams, geo, rounding) {
+choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette, borders, region, scale_center, logratio, show_endpoints, na_label, max_bubble_size, data_type, numeric_type, format_value, format_value_no_unit, format_value_label, city_insets, graphicsparams, geo, rounding, scale_limits) {
   
   continuous_scale <- FALSE
   
@@ -1169,15 +1178,12 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
         map <- map %>% mutate(Value = exp(Value))
       }
       
-      min_val <- min(vals, na.rm = TRUE)
-      max_val <- max(vals, na.rm = TRUE)
-      
       # For state-level maps we still assign bin_color for labeling
       n_continuous = 256
       if (!is.null(palette$cs_palette)) {
         cs_type <- if (is.na(scale_center)) "sequential" else "diverging"
       
-        cont_colors <- get_cs_palette(n = n_continuous, type = cs_type, name = palette$cs_palette)
+        cont_colors <- get_cs_palette(n = n_continuous, type = cs_type, name = palette$cs_palette, reverse = palette$reverse_cs_palette)
       } else {
         if (is.na(scale_center)) {
           cont_colors <- seq_gradient_pal(
@@ -1190,8 +1196,31 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
         }
         
       }
-
-      val_scaled <- rescale(map$Value, to = c(1, n_continuous))
+      
+      #scale_limits[1] is min, scale_limits[2] is max, default is c(NA, NA)
+      
+      if (!is.na(scale_center)) {
+      
+        # Compute max deviation from center
+        max_dev <- max(abs(vals - scale_center), na.rm = TRUE)
+        
+        min_val <- scale_center - max_dev
+        max_val <- scale_center + max_dev
+        
+        # Standard linear rescale across symmetric range
+        val_scaled <- rescale(map$Value, to = c(1, n_continuous), from = c(min_val, max_val))
+        
+      } else {
+        # sequential (unchanged)
+        min_val <- if (!is.na(scale_limits[1])) scale_limits[1] else min(vals, na.rm = TRUE)
+        max_val <- if (!is.na(scale_limits[2])) scale_limits[2] else max(vals, na.rm = TRUE)
+        
+        val_scaled <- rescale(map$Value, to = c(1, n_continuous), from = c(min_val, max_val))
+      }
+      if (any(vals < min_val | vals > max_val, na.rm = TRUE)) {
+        cat("Some values fall outside the specified scale and will be clipped.\n")
+      }
+      val_scaled <- pmin(pmax(val_scaled, 1), n_continuous)
       map$bin_color <- cont_colors[round(val_scaled)]
       
     # Binned scale
@@ -1263,7 +1292,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
       if (!is.null(palette$cs_palette)) {
         cs_type <- if (is.na(scale_center)) "sequential" else "diverging"
 
-        bin_palette <- get_cs_palette(n = n_bins, type = cs_type, name= palette$cs_palette)
+        bin_palette <- get_cs_palette(n = n_bins, type = cs_type, name= palette$cs_palette, reverse = palette$reverse_cs_palette)
       } else {
         if (is.na(scale_center)) {
           bin_palette <- seq_gradient_pal(
@@ -1304,7 +1333,8 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
     
     if (continuous_scale) {
       plot <- plot +
-        scale_color_gradientn(colors = cont_colors, na.value = palette$na_color, breaks = pretty(range(map$Value), n = 4)) +
+        # scale_color_gradientn(colors = cont_colors, na.value = palette$na_color, breaks = pretty(range(map$Value), n = 4)) +
+        scale_color_gradientn(colors = cont_colors, na.value = palette$na_color, breaks = pretty(range(c(min_val, max_val)), n = 4), limits = c(min_val, max_val)) +
         guides(color = guide_colorbar(title = NULL))
     } else {
       plot <- plot +
@@ -1324,7 +1354,7 @@ choropleth_map <- function(map, state_map, level, breaks, labels_manual, palette
     
     if (continuous_scale) {
       plot <- plot +
-        scale_fill_gradientn(colors = cont_colors, na.value = palette$na_color, labels = format_value_label) +
+        scale_fill_gradientn(colors = cont_colors, limits = c(min_val, max_val), na.value = palette$na_color, labels = format_value_label) +
         guides(fill = guide_colorbar(title = NULL))
     } else {
       plot <- plot +
@@ -1536,21 +1566,19 @@ add_state_labels <- function(plot, map, palette, format_value_label, geo, roundi
     external_label_states <- c(external_label_states, eastern_seaboard, "NS", "PE")
     no_adjustment = eastern_seaboard #it wouldn't break anything if they did get adjusted but I guess this is cleaner
   }
-  
 map <- map |>
-  mutate(label = format_value_label(Value),
-         label = case_when(Value < rounding & Value > 0 ~ paste0("<", format_value_label(rounding)),
-                           Value > -1*rounding & Value < 0 ~ paste0(">", format_value_label(-1*rounding)), #this will look kind of weird but idk what else to do to avoid false 0s or very long labels with signif()
-                           T ~ label),
+  mutate(label = case_when(Value < rounding/2 & Value > 0 ~ paste0("<", format_value_label(rounding)),
+                           Value > -1*rounding/2 & Value < 0 ~ paste0(">", format_value_label(-1*rounding)), #don't want false 0s, so anything that would round to 0 is replaced with <0.1
+                           T ~ format_value_label(Value)),
          nchar = nchar(label)) |>
   filter(!str_detect(label, "NA")) #remove NA labels
 
   #add thresholds for label length below which some states don't need repel
-  #HI: 2, VT: 1-2, NH: 2, MD: 1-2, NJ: 1-2
+  #HI: 2, VT: 1-2, NH: 1-2, MD: 1-2, NJ: 1-2
   #make a list of states which actually don't need to be adjusted
 no_repel = map |>
-  filter((nchar <= 2 & abbr %in% c("HI", "VT", "NH")) |
-         (nchar == 1 & abbr %in% c("MD", "CT"))) |> #could add NJ but I would need to adjust its label south
+  filter((nchar <= 2 & abbr %in% c("HI")) |
+         (nchar == 1 & abbr %in% c("MD", "CT", "NH", "VT"))) |> #could add NJ but I would need to adjust its label south
   pull(abbr) #I like this but also RI's repel doesn't look good when CT is taken away
 
 repel_states <- repel_states[!repel_states %in% no_repel]
