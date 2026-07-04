@@ -1,24 +1,24 @@
 ---
 title: "FarmMaps_New"
 format: pdf
-editor: visual
+editor: source
 ---
 
 ```{r}
 options(scipen = 999)
 library(tidyverse)
-
+library(sf)
+library(tools) #for toTitleCase()
 library(rnassqs)
 wd = "/Users/Hayden/Maps/"
-graphicspath_farm = paste0(wd, "Maps/Farm/")
 
-api_key <- "" #request an API key
+api_key <- "B3E11B15-C923-3D82-9CFC-81AE45FCC6E3"
 #https://quickstats.nass.usda.gov/api
 nassqs_auth(key = api_key)
 
-county_map_ag = st_read(paste0(wd, "county_map_ag/county_map_ag.shp"))
+county_map_ag = st_read("shapefiles/county_map_ag/county_map_ag.shp")
 
-state_map = st_read(paste0(wd, "state_map/state_map.shp"))
+state_map = st_read("shapefiles/state_map/state_map.shp")
 ```
 
 ```{r}
@@ -34,23 +34,25 @@ is_valid_color <- function(color) {
 ```
 
 ```{r}
-agcensus_api = function(request, params){
+agcensus_api = function(params){
   #Shoutout u/badassperson for sending me his USDA API-calling code
   
   # count number of records...
   # api won't provide > 50K
   recordcount <- nassqs_record_count(params)$count
   
+  years = params$year
+
   if (recordcount == 0) {
-    cat(paste0("No records found for ", request))
+    cat(paste0("No records found for ", tolower(params$commodity_desc),"\n"))
     next
   } else if (recordcount < 49999) {
     df <- nassqs(params)
   } else {
     # glue together multiple years if dataset is too big
-    data_list <- lapply(year_start:year_end, function(yr) {
+    data_list <- lapply(years, function(yr) {
       #we may want to iterate by commodity instead of year if we are requesting a ton of commodities at once
-      params[['year']] <- yr
+      params$year <- yr
       tryCatch(df <- nassqs(params))
     })
     df <- bind_rows(data_list)
@@ -71,8 +73,9 @@ clean_ag_data <- function(df){
           sep = " - ",
           fill = "right"
         ) |>
-        group_by(commodity, domain, fips) |>
-        filter(!is.na(Value)) |>
+        group_by(commodity, domain, fips, prodn_practice_desc) |>
+        filter(!is.na(Value),
+               Value != 0) |>
         arrange(desc(year)) |> #use most recent observation
         slice_head(n = 1) |>
         ungroup()
@@ -81,259 +84,1003 @@ clean_ag_data <- function(df){
 }
 ```
 
-Map-making loop for animal counts
-
 ```{r}
+# Parse a single line of user input into a numeric vector (returns NA on invalid)
+parse_breaks_input <- function(txt) {
+  txt <- trimws(txt)
+
+  if (txt == "") return(numeric(0))           # ENTER -> continue
+  if (tolower(txt) == "skip") return("skip")
+
+  # FIX: tell strsplit() to use Perl regex so \s works
+  parts <- unlist(strsplit(txt, "[,\\s]+", perl = TRUE))
+
+  nums <- suppressWarnings(as.numeric(parts))
+  if (any(is.na(nums))) return(NA_real_)
+  sort(nums)
+}
+
+# Interactive loop: keep calling `map_call()` until user presses ENTER (blank) to accept,
+# or enters 'q' to abort. `map_call` is a function that accepts a `breaks` argument.
+interactive_tune_breaks <- function(map_call, default_breaks = NULL) {
+  # start with default
+  current_breaks <- default_breaks
+
+  repeat {
+    # call map (map_call should be responsible for making+saving + opening the map)
+    map_call(current_breaks)
+
+    # ask user for new breaks
+    cat("\nCurrent breaks:", if (is.null(current_breaks) || length(current_breaks)==0) "<auto/continuous>" else paste(current_breaks, collapse = " "), "\n")
+    msg <- paste0("Enter new breaks (e.g. 100 200 400 800), press ENTER to accept and continue, or 'q' to quit: ")
+    ans <- readline(prompt = msg)
+    parsed <- parse_breaks_input(ans)
+
+    if (identical(parsed, "quit")) {
+      cat("Quitting by user request.\n")
+      stop("Aborted by user")          # or return(NULL) if you prefer to continue
+    }
+
+    if (is.numeric(parsed) && length(parsed) == 0) {
+      # ENTER pressed => accept current breaks and exit loop
+      cat("Accepting current breaks and continuing.\n")
+      return()
+    }
+
+    if (all(is.na(parsed))) {
+      cat("Invalid input. Try again. Example: 100 200 400 800\n")
+      next
+    }
+
+    # valid numeric vector -> update current_breaks and redraw map in next iteration
+    current_breaks <- parsed
+    cat("Updated breaks to:", paste(current_breaks, collapse = " "), "\nRe-drawing map...\n")
+    # loop repeats and map_call(current_breaks) will be invoked again
+  }
+}
+
+
+summary_stats <- function(data){
+  print(summary(data$Value))
+  print(quantile(data$Value, probs = seq(0,1,0.1), na.rm = TRUE))
+}
+```
+
+
+Map-making loop for animal counts
+```{r}
+#a bit more cumbersome that the version below where you can run each line individually, no national totals yet
 animal_map <- function() {
   repeat {
-    request <- readline(prompt = "Name an animal or 'done' to stop: ") #you can't put anything in parentheses or it corrects to it
-    if (request == "done") {
-      break
+    request <- readline(prompt = "Name an animal or 'done' to stop: ")
+    request = tolower(request)
+    if (request == "done") break
+
+    params <- list(
+      commodity_desc = toupper(request),
+      domaincat_desc = "NOT SPECIFIED",
+      agg_level_desc = c("COUNTY", "STATE"),
+      statisticcat_desc = "INVENTORY",
+      year = c(2017, 2022)
+    )
+
+    # Load or fetch data
+    if (!exists(request)) {
+      df <- agcensus_api(params)
+      df_clean <- clean_ag_data(df)
+      assign(request, df_clean, envir = .GlobalEnv)
     } else {
-      params <- list(
-        commodity_desc = toupper(request),
-        #c("SHEEP", "MINK", "HOGS", "GOATS", "ALPACAS", "LLAMAS", "TURKEYS", "BISON", "ELK", "DEER", "OSTRICHES", "EMUS", "DUCKS")
-        domaincat_desc = "NOT SPECIFIED",
-        agg_level_desc = "COUNTY",
-        statisticcat_desc = "INVENTORY",
-        #c("INVENTORY", "OPERATIONS")
-        year = c(2017, 2022) #really we should be sequencing along by 5 because we don't want non-census years typically because they'd have lower counts
+      df_clean <- get(request)
+    }
+
+    animals <- unique(df_clean$commodity)
+
+    for (animal in animals) {
+
+      # ------- Display Name -------
+      display_name <- readline(
+        prompt = paste0("Enter a plural display name for ", tolower(animal), ": ")
       )
-      
-      df = agcensus_api(request, params)
-      
-      df_clean = clean_ag_data(df)
-      
-      animals = unique(df_clean$commodity)
-      
-      for (animal in animals) {
-        display_name <- readline(prompt = paste0("Enter display name for ", tolower(animal), ": "))
-        if (display_name == "") {
-          display_name <- tolower(animal)
-        } else if (display_name == "skip") {
-          next
+      if (display_name == "") display_name <- tolower(animal)
+      if (display_name == "exit") break
+      if (display_name == "skip") next
+
+      # ------- Color -------
+      repeat {
+        color_hex <- readline(prompt = paste0("Enter a color for ", display_name, ": "))
+        if (color_hex == "") {
+          color_hex <- "maroon"
+          break
+        } else if (is_valid_color(color_hex)) {
+          break
+        } else {
+          cat("Invalid color. Use a hex code or R color name.\n")
         }
-        repeat {
-          color_hex <- readline(prompt = paste0("Enter a color for ", display_name, ": "))
-          if (color_hex == "") {
-            color_hex <- "maroon"
-            break
-          } else if (is_valid_color(color_hex)) {
-            break
-          } else {
-            cat("Invalid color. Please enter a valid hex code or R color name.\n")
-          }
-        }
-        include_disclaimer <- readline(prompt = "Is it wild? (yes/no): ")
-        
-        # Set disclaimer text based on user input
-        caption_text <- ifelse(
-          tolower(include_disclaimer) == "yes",
-          "Values indicate domesticated populations only",
-          ""
-        )
-        
-        repeat{
-          max_bubble_size = readline("Max bubble size? or 'done' to stop: ")
-          if(max_bubble_size == ""){
-            max_bubble_size = NA
-          } else if(max_bubble_size == "done"){
-            break
-          } else{
-            max_bubble_size = as.numeric(max_bubble_size)
-          }
-          map(
-          data = df_clean |> filter(str_detect(domain, "^INVENTORY"), commodity == animal),
+      }
+
+      # ------- Wild / Captive -------
+      include_disclaimer <- readline("Is it wild? (yes/no): ")
+      caption_text <- ifelse(
+        tolower(include_disclaimer) == "yes",
+        "Values based on domesticated populations only",
+        ""
+      )
+
+      # ------------------------------- COUNTY BUBBLE MAP -------------------------------
+      repeat {
+        max_bubble_size <- readline("Max bubble size? (ENTER for default, 'done' to skip): ")
+
+        if (max_bubble_size == "done") break
+        if (max_bubble_size == "")   max_bubble_size <- NA
+        else max_bubble_size <- as.numeric(max_bubble_size)
+
+        map(
+          data = df_clean |> filter(str_detect(domain, "^INVENTORY"), commodity == animal, agg_level_desc == "COUNTY"),
           map = county_map_ag,
           state_map = state_map,
-          graphicspath = graphicspath_farm,
           title = paste0("Number of ", str_to_title(display_name), " by County"),
           caption_manual = caption_text,
           source = "USDA",
-          years = c(2017, 2022),
+          years = 2022,
           bubbles = TRUE,
           palette = list("high_color" = color_hex),
           max_bubble_size = max_bubble_size
         )
+      }
+
+      # ------------------------------- COUNTY CHOROPLETHS W/ BREAK PROMPTS -------------------------------
+
+      make_choro <- function(title, unit_per = NULL) {
+
+        repeat {
+          # 1. Entry
+          cat("\nEnter manual breaks for:", title, "\n")
+          ans <- readline("Breaks (e.g. 10 50 200), ENTER to accept, or 'skip' to skip: ")
+
+          br <- parse_breaks_input(ans)
+
+          # 2. Quit branch
+          if (identical(br, "skip")) {
+            cat("Skipping map.\n")
+            return()
+          }
+
+          # 3. Invalid input
+          if (any(is.na(br))) {
+            cat("Invalid input. Try again.\n")
+            next
+          }
+          
+          map_data = df_clean |> 
+            filter(str_detect(domain, "^INVENTORY"), commodity == animal, agg_level_desc == "COUNTY")
+          
+          # 4. Render map
+          map(
+            data = map_data,
+            map = county_map_ag,
+            state_map = state_map,
+            title = title,
+            caption_manual = caption_text,
+            source = "USDA",
+            years = 2022,
+            bubbles = FALSE,
+            per = unit_per,
+            palette = list("high_color" = color_hex),
+            breaks = if (length(br) == 0) compute_breaks(map_data$Value) else br
+          )
+
+          # 5. Ask for acceptance
+          ok <- readline("Satisfied? (y/n): ")
+          if (tolower(ok) == "y" || ok == "") break
         }
       }
-    }
-  }
-} 
+
+      # ------ Per Square Mile -------
+      make_choro(
+        title = paste0("Number of ", str_to_title(display_name), " Per Square Mile"),
+        unit_per = "sqmi"
+      )
+
+      # ------ Per Capita -------
+      make_choro(
+        title = paste0("Number of ", str_to_title(display_name), " Per Capita"),
+        unit_per = "pop"
+      )
+
+
+      # ------------------------------- NEW: STATE-LEVEL MAPS -------------------------------
+
+      make_state_map <- function(title, unit_per) {
+        repeat {
+          cat("\nEnter breaks for:", title, "\n")
+          ans <- readline("Breaks (e.g. 1000 5000 20000), ENTER to accept, or 'skip' to skip: ")
+
+          br <- parse_breaks_input(ans)
+          if (identical(br, "skip")) return()
+          if (any(is.na(br))) { cat("Invalid.\n"); next }
+
+          map_data = df_clean |> 
+            filter(domain == "INVENTORY", commodity == animal, agg_level_desc == "STATE")
+          #there is also inventory in $ and $/head but I'm not super interested in mapping that
+          
+          map(
+            data = map_data,
+            map = state_map,
+            state_map = state_map,
+            title = title,
+            caption_manual = caption_text,
+            source = "USDA",
+            years = 2022,
+            bubbles = FALSE,
+            per = unit_per,
+            palette = list("high_color" = color_hex),
+            breaks = if (length(br) == 0) compute_breaks(map_data$Value) else br
+          )
+
+          ok <- readline("Satisfied? (y/n): ")
+          if (tolower(ok) == "y" || ok == "") break
+        }
+      }
+
+      make_state_map(paste0("Number of ", str_to_title(display_name)), unit_per = "")
+      
+      make_state_map(paste0(str_to_title(display_name), " per Capita"), unit_per = "pop")
+      
+      make_state_map(paste0(str_to_title(display_name), " per Square Mile"), unit_per = "sqmi")
+
+    } # end animal loop
+  } # end main repeat
+}
 ```
+
 
 ```{r}
 animal_map()# #954535 chestnut brown
-#how to get mink from the API?? > it's only state level
+# #C9592E
+# view available data at https://quickstats.nass.usda.gov/
 #query by group_desc, then iterate through all animals??
 ```
 
-crop_map
 
+#this function is too cumbersome, should just get data and make maps manually so that breaks can be customized
 ```{r}
-crop_map <- function() {
-  repeat {
-    request <- readline(prompt = "Name a crop or 'done' to stop: ") #you can't put anything in parentheses or it corrects to it
-    if (request == "done") {
-      break
-    } else {
-        params <- list(
-  commodity_desc = toupper(request),
-  domaincat_desc = "NOT SPECIFIED",
-  agg_level_desc = c("COUNTY", "STATE"),
-  statisticcat_desc = c("AREA BEARING", "PRODUCTION"),
-  year = c(2017,2022)
-)
-      df = agcensus_api(request, params)
-      
-      df_clean = clean_ag_data(df)
-      
-      crops = unique(df_clean$commodity)
-      
-      for (crop in crops) {
-        display_name <- readline(prompt = paste0("Enter display name for ", tolower(crop), ": "))
-        if (display_name == "") {
-          display_name <- toTitleCase(tolower(crop))
-        } else if (display_name == "skip") {
-          next
-        } else{
-          display_name <- toTitleCase(tolower(display_name))
-        }
-        repeat {
-          color_hex <- readline(prompt = paste0("Enter a color for ", display_name, ": "))
-          if (color_hex == "") {
-            color_hex <- "maroon"
-            break
-          } else if (is_valid_color(color_hex)) {
-            break
-          } else {
-            cat("Invalid color. Please enter a valid hex code or R color name.\n")
-          }
-        }
+request = "sheep" #Equine
+params <- list(
+        commodity_desc = toupper(request),
+        #c("SHEEP", "MINK", "HOGS", "GOATS", "ALPACAS", "LLAMAS", "TURKEYS", "BISON", "ELK", "DEER", "OSTRICHES", "EMUS", "DUCKS")
+        domaincat_desc = "NOT SPECIFIED",
+        statisticcat_desc = "INVENTORY",
+        #c("INVENTORY", "OPERATIONS")
+        year = c(2017, 2022) #really should be sequencing along by 5 because we don't want non-census years typically because they'd have lower counts
+      )
+
+if(!exists(paste0(request, "_national"))){ #don't call API if we already have the data
+  for(geo in c("COUNTY", "STATE", "NATIONAL")) {
+    params_geo = append(params, list(agg_level_desc = geo))
+    df = agcensus_api(params_geo)
+    df_geo = clean_ag_data(df)
+    assign(paste0(request, "_", tolower(geo)), df_geo, envir = .GlobalEnv)
+    assign(paste0(df, "_", tolower(geo), df_geo), envir = .GlobalEnv)
+  }
+} else {
+  tryCatch(df_county = get(request, "_county"), error = cat(paste0("No county data for ", request)))
+  tryCatch(df_state = get(request, "_state"), error = cat(paste0("No state data for ", request)))
+  
+  df_national = get(request, "_national")
+}
+animal = "SHEEP, INCL LAMBS" #EQUINE, HORSES & PONIES
+display_name = "Sheep" #Horses
+
+df_county = df_county |>
+  filter(domain == "INVENTORY", commodity == animal)
+df_state = df_state |>
+  filter(domain == "INVENTORY", commodity == animal)
+df_national = df_national |>
+  filter(domain == "INVENTORY", commodity == animal)
+
+      #COUNTY MAPS
+
+        map(
+          #data = df_county |> filter(str_detect(domain, "^INVENTORY"), commodity == animal),
+          data = df_county,
+          map = county_map_ag,
+          state_map = state_map,
+          title = paste0("Number of ", str_to_title(display_name), " by County"),
+          subtitle = paste0("US: ", shorten_func(0.1)(df_national |> pull(Value))),
+          caption_manual = "Values indicate domesticated populations only",
+          source = "USDA",
+          years = 2022,
+          bubbles = T,
+          palette = list(cs_palette = "BurgYl"),#954535
+          #max_bubble_size = max_bubble_size
+        )
+
+        map(
+          #data = df_county |> filter(str_detect(domain, "^INVENTORY"), commodity == animal),
+          data = df_county,
+          map = county_map_ag,
+          state_map = state_map,
+          title = paste0(str_to_title(display_name), " Per Square Mile"),
+          caption_manual = "Values indicate domesticated populations only",
+          source = "USDA",
+          per = "sqmi",
+          years = 2022,
+          bubbles = F,
+          palette = list(cs_palette = "BurgYl",
+                         reverse_cs_palette = T),#954535
+          breaks = c(1,2,5,10)
+        )
+
+        map(
+          #data = df_county |> filter(str_detect(domain, "^INVENTORY"), commodity == animal),
+          data = df_county,
+          map = county_map_ag,
+          state_map = state_map,
+          title = paste0(str_to_title(display_name), " Per Capita"),
+          caption_manual = "Values indicate domesticated populations only",
+          source = "USDA",
+          per = "pop",
+          years = 2022,
+          bubbles = F,
+          palette = list(cs_palette = "BurgYl",
+                         reverse_cs_palette = T),#954535
+          rounding = 0.01,
+          breaks = c(0.05, 0.1, 0.2, 0.5, 1)
+        )
+        
+        #STATE MAPS
         
         map(
-          data = df_clean |> filter(domain == "ACRES BEARING", commodity == toupper(crop), agg_level_desc == "COUNTY"),
-          map = county_map_ag,
-          state_map = state_map,
-          graphicspath = graphicspath_farm,
-          title = paste0(display_name, " Acreage by County"),
-          source = "USDA",
-          years = c(2017, 2022),
-          bubbles = T,
-          palette = list("high_color" = color_hex)
-        )
-        map(
-          data = df_clean |> filter(domain == "ACRES BEARING", commodity == toupper(crop), agg_level_desc == "COUNTY"),
-          map = county_map_ag,
-          state_map = state_map,
-          graphicspath = graphicspath_farm,
-          title = paste0("Portion of Land Used for Growing ", display_name),
-          bubbles = F,
-          per = "acre",
-          source = "USDA",
-          years = c(2017, 2022),
-          palette = list("high_color" = color_hex, "low_color" = "beige"),
-          na_to_0 = T,
-          unit = "%"
-        )
-        map(
-          data = df_clean |> filter(domain == "PRODUCTION", commodity == toupper(crop), agg_level_desc == "STATE"),
+          data = df_state,
           map = state_map,
           state_map = state_map,
-          graphicspath = graphicspath_farm,
-          title = paste0(display_name, " Production by State"),
-          bubbles = T,
+          title = paste0("Number of ", str_to_title(display_name), " by State"),
+          subtitle = paste0("US: ", shorten_func(0.1)(df_national |> pull(Value))),
+          caption_manual = "Values indicate domesticated populations only",
           source = "USDA",
-          years = c(2017, 2022),
-          palette = list("high_color" = color_hex)
+          years = 2022,
+          bubbles = F,
+          #na_to_0 = T, #only if the only NA is DC or otherwise certainly 0
+          palette = list(cs_palette = "BurgYl",
+                         reverse_cs_palette = T),#954535
+          #max_bubble_size = max_bubble_size
         )
-      }
-    }
+        
+        map(
+          data = df_state,
+          map = state_map,
+          state_map = state_map,
+          title = paste0(str_to_title(display_name), " Per Square Mile"),
+          caption_manual = "Values indicate domesticated populations only",
+          source = "USDA",
+          per = "sqmi",
+          years = 2022,
+          bubbles = F,
+          palette = list(cs_palette = "BurgYl",
+                         reverse_cs_palette = T),#954535
+          breaks = c(0.5,1,2,3)
+        )
+
+        map(
+          data = df_state,
+          map = state_map,
+          state_map = state_map,
+          title = paste0(str_to_title(display_name), " Per Capita"),
+          caption_manual = "Values indicate domesticated populations only",
+          source = "USDA",
+          per = "pop",
+          years = 2022,
+          bubbles = F,
+          palette = list(cs_palette = "BurgYl",
+                         reverse_cs_palette = T),#954535
+          rounding = 0.01,
+          breaks = c(0.02, 0.05, 0.1, 0.2)
+        )
+        
+```
+
+#crop_map
+```{r}
+# crop = "soybeans"
+# high_color = "#4cd038" 
+# farm_type = "Fields" #Farms or Orchards or Groves
+#util_practice_desc == "ALL UTILIZATION PRACTICES", or some handling of this column is necessary for fruits as we only want totals (as opposed to processing, fresh, organic etc.) but for corn there is no total, just grain or sileage
+#maybe prompt user with commodity-util_practice pair for display name?
+
+  #unfortunately it seems that tree fruit and berry production is only reported by state
+  
+  #I need to be careful here because some crops you need to aggregate across varieties while for some there are totals
+
+crop_map = function(crop, color, farm_type){
+  
+  crop = tolower(crop)
+  
+params <- list(
+  commodity_desc = toupper(crop),
+  domaincat_desc = "NOT SPECIFIED",
+  agg_level_desc = c("US", "STATE", "COUNTY"),
+  statisticcat_desc = c("AREA BEARING", "AREA HARVESTED","PRODUCTION"), #add "ACRES" later and then have the % of land area filter based on area bearing or acres
+  year = c(2017,2022)
+)
+
+if(!exists(crop)){ #don't call API if we already have the data
+df = agcensus_api(params)
+				
+df_clean = clean_ag_data(df)
+
+assign(crop,df_clean,envir = .GlobalEnv)
+}
+
+  land_data = get(crop) |> 
+    filter(domain %in% c("ACRES BEARING", "ACRES HARVESTED"), commodity_desc == toupper(crop), agg_level_desc %in% c("COUNTY", "STATE"), prodn_practice_desc == "ALL PRODUCTION PRACTICES") |> 
+    group_by(fips, agg_level_desc, commodity) |> 
+    summarize(Value = sum(Value)) |>
+      ungroup()
+  #cherries don't have an all classes and instead have sweet and tart, so I woud have to aggregate across and/or do seperate maps
+
+  production_data = get(crop) |> filter(
+    commodity_desc == toupper(crop),
+    #util_practice_desc == "ALL UTILIZATION PRACTICES",
+    prodn_practice_desc == "ALL PRODUCTION PRACTICES",
+    statisticcat_desc == "PRODUCTION"
+  ) |>
+    mutate(pounds = case_when(unit_desc == "LB" ~ 1,
+                              str_detect(unit_desc, "TON") ~ 2000,
+                              unit_desc == "CWT" ~ 100, #It's written this way to catch units I haven't implemented yet with the stop()
+                              unit_desc == "$" ~ 1,
+                              unit_desc == "BU" ~ 1,
+                              unit_desc == "GALLONS" ~ 1,
+                              T ~ NA),
+           Value = Value*pounds,
+           unit = case_when(unit_desc %in% c("LB", "TONS", "CWT") ~ "lbs",
+                            unit_desc == "GALLONS" ~ "gal",
+                            T ~ tolower(unit_desc))) |>
+    filter(!unit %in% c("pct by type", "pct by grade")) |> #we don't care about this
+    group_by(fips, agg_level_desc, unit, commodity) |> 
+    summarize(Value = sum(Value)) |>
+    ungroup()
+  if(any(is.na(production_data$Value))){
+    stop("Units not recognized in production_data")
   }
+  
+  #iterate through commodity-unit-aggregation level combos
+  #prompt user for display name for each commodity
+  
+  map_types_prod = production_data |>
+    select(agg_level_desc, unit, commodity) |>
+    unique()
+  
+  map_types_land = land_data |>
+    select(agg_level_desc, commodity) |>
+    mutate(unit = "acres") |>
+    unique()
+  
+  map_types = rbind(map_types_land, map_types_prod) |>
+    select(-unit) |>
+    unique()
+  
+  cat("Crop types:\n")
+  cat(paste0(unique(map_types$commodity)), collapse = "\n")
+  
+  for(com in unique(map_types$commodity)){
+    #enter singular version
+    display_name = readline(prompt = paste("Enter display name (singular) for", com, ", 'skip', or 'exit': ")) #assign varieties the same name to merge them
+    if(display_name == ""){
+      display_name = com
+    }
+    display_name = tolower(display_name)
+    if(display_name == "exit"){
+      stop()
+    } else if(display_name == "skip"){
+      map_types_prod = map_types_prod |>
+        filter(commodity != com)
+      map_types_land = map_types_land |>
+        filter(commodity != com)
+      production_data = production_data |>
+        filter(commodity != com)
+      land_data = land_data |>
+        filter(commodity != com)
+    }
+    map_types_prod = map_types_prod |>
+      mutate(commodity = if_else(commodity == com, display_name, commodity))
+    production_data = production_data |>
+      mutate(commodity = if_else(commodity == com, display_name, commodity))
+    map_types_land = map_types_land |>
+      mutate(commodity = if_else(commodity == com, display_name, commodity))
+    land_data = land_data |>
+      mutate(commodity = if_else(commodity == com, display_name, commodity))
+  }
+  
+  map_types_land = unique(map_types_land)
+  map_types_prod = unique(map_types_prod)
+  
+    map_types_land |> pmap(function(agg_level_desc, commodity, unit){
+      cat("Processing: ", agg_level_desc, commodity, unit, "\n")
+      
+      if(agg_level_desc == "COUNTY"){
+        county_land_data = land_data |>
+          filter(commodity == !!commodity,
+                 agg_level_desc == !!agg_level_desc)
+      
+        if(nrow(county_land_data) != 0) {
+          map(
+            data = county_land_data,
+            map = county_map_ag,
+            state_map = state_map,
+            title = paste0(toTitleCase(commodity), " ", farm_type, " as a Percent of Land Area"),
+            source = "USDA",
+            years = 2022,
+            bubbles = F,
+            per = "acre",
+            unit =  "%",
+            palette = list("high_color" = color)
+          )
+          map(
+            data = county_land_data,
+            map = county_map_ag,
+            state_map = state_map,
+            title = paste0(toTitleCase(commodity), " Acreage"),
+            source = "USDA",
+            years = 2022,
+            bubbles = T,
+            unit =  "acres",
+            palette = list("high_color" = color)
+          )
+      } 
+        }else{
+
+      state_land_data = land_data |>
+        filter(commodity == !!commodity,
+        agg_level_desc == !!agg_level_desc)
+
+      if(nrow(state_land_data) != 0){
+  map(data = state_land_data,
+      map = state_map,
+      state_map = state_map,
+      title = paste0(toTitleCase(commodity)," ",farm_type," as a Percent of Land Area"),
+      source = "USDA",
+      years = 2022,
+      bubbles = F,
+      per = "acre",
+      unit =  "%",
+      palette = list("high_color" = color))
+    map(data = state_land_data,
+      map = state_map,
+      state_map = state_map,
+      title = paste0(toTitleCase(commodity)," Acreage by State"),
+      source = "USDA",
+      years = 2022,
+      bubbles = F,
+      unit =  "acres",
+      palette = list("high_color" = color))
+      }
+        }
+      
+      #stop to ask for breaks?
+    })
+  
+    map_types_prod |> pmap(function(agg_level_desc, unit, commodity) {
+      
+    print(paste("Processing:", agg_level_desc, unit, commodity))
+      
+      if(agg_level_desc == "STATE"){
+        level = "State"
+        map = state_map
+      } else{
+        level = "County"
+        map = county_map_ag
+      }
+      
+      filtered_data <- production_data %>%
+      filter(agg_level_desc == !!agg_level_desc,
+             unit == !!unit,
+             commodity == !!commodity) |>
+        group_by(fips, commodity, unit) |> #merge commodities that were merged by naming them the same thing
+        summarize(Value = sum(Value, na.rm = T))
+      
+      unit_text = case_when(unit == "bu" ~ "Bushels",
+                            unit == "lbs" ~ "Pounds",
+                            unit == "$" ~ "Dollars",
+                            unit == "gal" ~ "Gallons",
+                            T ~ unit) #unrecognized unit
+      
+     map(data = filtered_data,
+      map = map,
+      state_map = state_map,
+      title = paste0(toTitleCase(commodity), " ", if_else(unit == "$", "Sales", "Production")," by ", level),
+      source = "USDA",
+      years = params$year,
+      bubbles = if_else(level == "State", F, T),
+      subtitle = paste0(unit_text, " per year"),
+      unit = unit,
+      palette = list("high_color" = color)) 
+     
+     #prompt for max_bubble_size?
+    
+  })
+
 }
 ```
 
 ```{r}
-#this one usually doesn't work, needs a lot of work
-crop_map()
+crop_map(crop = "soybeans", color = "#4cd038", farm_type = "Fields")
+crop_map(crop = "rice", color = "#4cd038", farm_type = "Farms")
+crop_map(crop = "plums", color = "purple", farm_type = "Orchards")
+crop_map(crop = "grapes", color = "purple", farm_type = "Groves")
+crop_map(crop = "pears", color = "#4cd038", farm_type = "Orchards")
+crop_map(crop = "apples", color = "#c22820", farm_type = "Orchards")
+crop_map(crop = "cherries", color = "#B62625", farm_type = "Orchards") #split into tart and sweet, but I want total so current code doesn't work
+crop_map(crop = "peaches", color = "#f6a192", farm_type = "Orchards")
+crop_map(crop = "sorghum", color = "#CC5500", farm_type = "Fields")
+crop_map(crop = "strawberries", color = "#fc5a8d", farm_type = "Fields")
+crop_map(crop = "blueberries", color = "darkblue", farm_type = "Fields")
+crop_map(crop = "oats", color = "#954535", farm_type = "Farms")
+crop_map(crop = "potatoes", color = "#954535", farm_type = "Fields")
+crop_map(crop = "pumpkins", color = "#CC5500", farm_type = "Patches")
+# green #4cd038 brown #954535 burnt orange #CC5500 or #f29d02
+
+unique(grapes$unit_desc)
 ```
 
-#manual
 
+Manual crop map
 ```{r}
-crop = "cherries"
-display_name = "Cherry" #singular
-high_color = "red"
-farm_type = "Orchards" #Farms or Orchards
+crop = "pumpkins"
+color = "#FF7518"
+farm_type = "Farms"
 
-  params <- list(
+crop = tolower(crop)
+  
+params <- list(
   commodity_desc = toupper(crop),
   domaincat_desc = "NOT SPECIFIED",
-  agg_level_desc = c("STATE", "COUNTY"),
-  statisticcat_desc = c("AREA BEARING", "PRODUCTION"), #add "ACRES" later and then have the % of land area filter based on area bearing or acres
+  agg_level_desc = c("NATIONAL", "STATE", "COUNTY"),
+  statisticcat_desc = c("AREA BEARING", "AREA HARVESTED","PRODUCTION"), #add "ACRES" later and then have the % of land area filter based on area bearing or acres
   year = c(2017,2022)
 )
 
-  df = agcensus_api(request, params)
+if(!exists(crop)){ #don't call API if we already have the data
+df = agcensus_api(params)
 				
 df_clean = clean_ag_data(df)
 
-assign(crop,df_clean)
+assign(crop,df_clean,envir = .GlobalEnv)
+}
 
-#cherries don't have an all classes and instead have sweet and tart, so I woud have to aggregate across and/or do seperate maps
-  map(data = get(crop) |> filter(domain == "ACRES BEARING", commodity_desc == toupper(crop), agg_level_desc == "COUNTY") |> group_by(fips) |> summarize(Value = sum(Value)),
-      map = county_map_ag,
-      state_map = state_map,
-      graphicspath = graphicspath_farm, 
-      title = paste0(display_name," ",farm_type," as a Percent of Land Area"),
-      source = "USDA",
-      years = c(2017, 2022),
-      bubbles = F,
-      per = "acre",
-      unit =  "%",
-      breaks = c(0.1,0.2,0.5), #key is messed up if one of the buckets has no observations
-      palette = list("high_color" = high_color))
-  
-  #unfortunately it seems that tree fruit and berry production is only reported by state
-  
-  #detect unit
-  state_data = get(crop) |> filter(
-    agg_level_desc == "STATE",
+  land_data = get(crop) |> 
+    filter(domain %in% c("ACRES BEARING", "ACRES HARVESTED"), commodity_desc == toupper(crop), agg_level_desc %in% c("COUNTY", "STATE"), prodn_practice_desc == "ALL PRODUCTION PRACTICES", util_practice_desc == "ALL UTILIZATION PRACTICES") |> 
+    group_by(fips, agg_level_desc, commodity) |> 
+    summarize(Value = sum(Value)) |>
+      ungroup()
+  #cherries don't have an all classes and instead have sweet and tart, so I woud have to aggregate across and/or do seperate maps
+
+  production_data = get(crop) |> filter(
     commodity_desc == toupper(crop),
-    unit_desc != "$",
     util_practice_desc == "ALL UTILIZATION PRACTICES",
+    prodn_practice_desc == "ALL PRODUCTION PRACTICES",
     statisticcat_desc == "PRODUCTION"
-  ) |> 
+  ) |>
     mutate(pounds = case_when(unit_desc == "LB" ~ 1,
-                              unit_desc == "TONS" ~ 2000,
-                              unit_desc == "CWT" ~ 100,
+                              str_detect(unit_desc, "TON") ~ 2000,
+                              unit_desc == "CWT" ~ 100, #It's written this way to catch units I haven't implemented yet with the stop()
+                              unit_desc == "$" ~ 1,
+                              unit_desc == "BU" ~ 1,
+                              unit_desc == "GALLONS" ~ 1,
                               T ~ NA),
-           Value = Value*pounds) |>
-    group_by(fips) |> 
+           Value = Value*pounds,
+           unit = case_when(unit_desc %in% c("LB", "TONS", "CWT") ~ "lbs",
+                            unit_desc == "GALLONS" ~ "gal",
+                            T ~ tolower(unit_desc))) |>
+    filter(!unit %in% c("pct by type", "pct by grade")) |> #we don't care about this
+    group_by(fips, agg_level_desc, unit, commodity) |> 
     summarize(Value = sum(Value)) |>
     ungroup()
   
-  if(any(is.na(state_data$Value))){
-    cat("Units not recognized in state_data")
+  operations_data = get(crop) |>
+    filter(domain %in% "OPERATIONS WITH AREA HARVESTED", agg_level_desc %in% c("COUNTY", "STATE"), prodn_practice_desc == "ALL PRODUCTION PRACTICES", util_practice_desc == "ALL UTILIZATION PRACTICES") |>
+    group_by(fips, agg_level_desc, commodity) |> 
+    summarize(Value = sum(Value)) |>
+      ungroup()
+  
+  
+  if(any(is.na(production_data$Value))){
+    stop("Units not recognized in production_data")
   }
   
-  #cherries are reported in tons for sweet and pounds for tart, so I have to standardize
+  #iterate through commodity-unit-aggregation level combos
+  #prompt user for display name for each commodity
   
-  # if(!str_detect(unit, "s$")) unit = paste0(unit,"s")
+  map_types_prod = production_data |>
+    select(agg_level_desc, unit, commodity) |>
+    unique()
   
-    map(data = state_data,
-      map = state_map,
-      state_map = state_map,
-      graphicspath = graphicspath_farm,
-      title = paste0(display_name, " Production By State"),
-      source = "USDA",
-      years = c(2017, 2022),
-      bubbles = F,
-      subtitle = paste0("Pounds per year"),
-      unit = "lbs",
-      palette = list("high_color" = high_color))
+  map_types_land = land_data |>
+    select(agg_level_desc, commodity) |>
+    mutate(unit = "acres") |>
+    unique()
+  
+  map_types_operations = operations_data |>
+    select(agg_level_desc, commodity) |>
+    mutate(unit = "operations") |>
+    unique()
+  
+  map_types = rbind(map_types_land, map_types_prod, map_types_operations) |>
+    filter(agg_level_desc != "NATIONAL") #use this for subtitles
+    # select(-unit) |>
+    # unique()
+  
+  cat("Crop types:\n")
+  cat(paste0(unique(map_types$commodity)), collapse = "\n")
+  
+  for(com in unique(map_types$commodity)){
+    #enter singular version
+    display_name = readline(prompt = paste("Enter display name for", com, ", 'skip', or 'exit': ")) #assign varieties the same name to merge them
+    if(display_name == ""){
+      display_name = com
+    }
+    display_name = tolower(display_name)
+    if(display_name == "exit"){
+      stop()
+    } else if(display_name == "skip"){
+      map_types_prod = map_types_prod |>
+        filter(commodity != com)
+      map_types_land = map_types_land |>
+        filter(commodity != com)
+      map_types_operations = map_types_operations |>
+        filter(commodity != com)
+      production_data = production_data |>
+        filter(commodity != com)
+      land_data = land_data |>
+        filter(commodity != com)
+      operations_data = operations_data |>
+        filter(commodity != com)
+    }
+    map_types_prod = map_types_prod |>
+      mutate(commodity = if_else(commodity == com, display_name, commodity))
+    production_data = production_data |>
+      mutate(commodity = if_else(commodity == com, display_name, commodity))
+    map_types_land = map_types_land |>
+      mutate(commodity = if_else(commodity == com, display_name, commodity))
+    land_data = land_data |>
+      mutate(commodity = if_else(commodity == com, display_name, commodity))
+    map_types_operations = map_types_operations |>
+      mutate(commodity = if_else(commodity == com, display_name, commodity))
+    operations_data = operations_data |>
+      mutate(commodity = if_else(commodity == com, display_name, commodity))
+  }
+  
+  map_types_land = unique(map_types_land)
+  map_types_prod = unique(map_types_prod)
+  map_types_operations = unique(map_types_operations)
+  
+    map_types_land |> pmap(function(agg_level_desc, commodity, unit){
+      cat("Processing: ", agg_level_desc, commodity, unit, "\n")
+      
+      if(agg_level_desc == "COUNTY"){
+        county_land_data = land_data |>
+          filter(commodity == !!commodity,
+                 agg_level_desc == !!agg_level_desc)
+      
+        if(nrow(county_land_data) != 0) {
+          
+          default_breaks <- c(0.01, 0.1, 0.5, 1, 5)
+          cat("Percent of Land Area by County\n")
+          map_call_prod <- function(breaks_vec){
+            map(
+              data = county_land_data,
+              map = county_map_ag,
+              state_map = state_map,
+              title = paste0(toTitleCase(commodity), " ", farm_type, " as a Percent of Land Area"),
+              source = "USDA",
+              years = 2022, #years doesn't do anything anymore
+              bubbles = F,
+              per = "acre",
+              unit =  "%",
+              breaks = breaks_vec,
+              palette = list("high_color" = color)
+            )
+          }
+          
+          interactive_tune_breaks(map_call_prod, default_breaks)
+          
+          cat("Acreage by County\n")
+          map(
+            data = county_land_data,
+            map = county_map_ag,
+            state_map = state_map,
+            title = paste0(toTitleCase(commodity), " Acreage"),
+            source = "USDA",
+            years = 2022,
+            bubbles = T,
+            unit =  "acres",
+            palette = list("high_color" = color)
+          )
+      } 
+        }else{
+      
+      state_land_data = land_data |>
+        filter(commodity == !!commodity,
+        agg_level_desc == !!agg_level_desc)
+      
+      national_total = state_land_data |>
+        filter(fips != "98") |> #remove the other states row because it's from the SURVEY source not CENSUS. For pumpkins, there was data for every state but 7.3k acres in "OTHER STATES" presumably these were censored in the vegetable survey but not the census
+        summarize(total = sum(Value)) |>
+        pull(total) #there is no national row for state acreage so I assume no censoring?
+
+      if(nrow(state_land_data) != 0){
+        default_breaks <- c(0.01, 0.1, 0.5, 1, 5) #summary stats aren't very useful for this one because it hasn't been divided by acres yet
+    cat("Percent of Land Area by State\n")
+    map_call_prod <- function(breaks_vec){
+      map(data = state_land_data,
+        map = state_map,
+        state_map = state_map,
+        title = paste0(toTitleCase(commodity)," ",farm_type," as a Percent of Land Area"),
+        source = "USDA",
+        years = 2022,
+        bubbles = F,
+        per = "acre",
+        unit =  "%",
+        breaks = breaks_vec,
+        palette = list("high_color" = color)
+        )
+    }
     
-  #CA-specific map?
+    interactive_tune_breaks(map_call_prod, default_breaks)
+    
+    cat("Acreage by State\n")
+    
+    summary_stats(state_land_data)
+    default_breaks <- compute_breaks(state_land_data$Value)
+    
+    map_call_prod <- function(breaks_vec){
+      map(data = state_land_data,
+        map = state_map,
+        state_map = state_map,
+        title = paste0(toTitleCase(commodity)," Acreage"),
+        subtitle = paste0("US Total: ", append_unit("", " acres")(national_total)),
+        source = "USDA",
+        years = 2022,
+        bubbles = F,
+        unit =  "acres",
+        breaks = breaks_vec,
+        # caption_manual = if_else(!is.na(other_states), paste0("Other States: ", shorten(other_states), " acres"), ""),
+        palette = list("high_color" = color)
+        )
+    }
+    interactive_tune_breaks(map_call_prod, default_breaks)
+        }
+      }
+    })
+  
+    map_types_prod |> pmap(function(agg_level_desc, unit, commodity) {
+      
+    print(paste("Processing:", agg_level_desc, unit, commodity))
+      
+      if(agg_level_desc == "STATE"){
+        level = "State"
+        map = state_map
+      } else{
+        level = "County"
+        map = county_map_ag
+      }
+      
+      filtered_data <- production_data %>%
+      filter(agg_level_desc == !!agg_level_desc,
+             unit == !!unit,
+             commodity == !!commodity) |>
+        group_by(fips, commodity, unit) |> #merge commodities that were merged by naming them the same thing
+        summarize(Value = sum(Value, na.rm = T))
+      
+      unit_text = case_when(unit == "bu" ~ "Bushels",
+                            unit == "lbs" ~ "Pounds",
+                            unit == "$" ~ "Dollars",
+                            unit == "gal" ~ "Gallons",
+                            T ~ unit) #unrecognized unit
+
+    dollar = if_else(unit == "$", "$", "")
+    
+    if(level == "State"){
+      
+    other_states = filtered_data |>
+      filter(fips == "98",
+             unit == unit) |>
+      pull(Value)
+      
+    cat(paste0(if_else(unit == "$", "Sales", "Production"), " by State\n"))
+    summary_stats(filtered_data)
+    default_breaks = compute_breaks(filtered_data$Value)
+    
+      map_call_prod <- function(breaks_vec){
+       map(data = filtered_data,
+        map = map,
+        state_map = state_map,
+        title = paste0(toTitleCase(commodity), " ", if_else(unit == "$", "Sales", "Production")),
+        source = "USDA",
+        years = params$year,
+        bubbles = F,
+        subtitle = paste0(unit_text, " per year"),
+        unit = unit,
+        breaks = breaks_vec,
+        caption_manual = if_else(!is.na(other_states), paste0("Other States: ", append_unit(dollar, if_else(unit == "$", "", paste0(" ", unit)))(other_states)), ""),
+        palette = list("high_color" = color)
+        )
+    }
+    interactive_tune_breaks(map_call_prod, default_breaks)
+      
+    } else {
+
+    cat(paste0(if_else(unit == "$", "Sales", "Production"), " by County\n"))
+     map(data = filtered_data,
+      map = map,
+      state_map = state_map,
+      title = paste0(toTitleCase(commodity), " ", if_else(unit == "$", "Sales", "Production")),
+      source = "USDA",
+      years = params$year,
+      bubbles = T,
+      subtitle = paste0(unit_text, " per year"),
+      unit = unit,
+      palette = list("high_color" = color)
+      )
+    }
+    
+  })
+    
+    
+  map_types_operations |> pmap(function(agg_level_desc, unit, commodity) {
+    #I don't do anything to handle fips == 98 for this, don't think it will come up
+      
+    print(paste("Processing:", agg_level_desc, unit, commodity))
+      
+      if(agg_level_desc == "COUNTY"){
+        county_operations_data = operations_data |>
+          filter(commodity == !!commodity,
+                 agg_level_desc == !!agg_level_desc)
+      
+        if(nrow(county_operations_data) != 0) {
+          cat("Operations by County\n")
+          
+          map(
+            data = county_operations_data,
+            map = county_map_ag,
+            state_map = state_map,
+            title = paste0(toTitleCase(commodity), " ", farm_type),
+            source = "USDA",
+            years = 2022,
+            palette = list("high_color" = color)
+          )
+      } 
+        }else{
+
+      state_operations_data = operations_data |>
+        filter(commodity == !!commodity,
+        agg_level_desc == !!agg_level_desc)
+
+      if(nrow(state_operations_data) != 0){
+        
+        cat("Operations by State\n")
+        summary_stats(state_operations_data)
+        default_breaks = compute_breaks(state_operations_data$Value)
+    
+      map_call_prod <- function(breaks_vec){
+        
+      map(data = state_operations_data,
+          map = state_map,
+          state_map = state_map,
+          title = paste0(toTitleCase(commodity)," ",farm_type),
+          subtitle = paste0("US Total: ", shorten(sum(state_operations_data$Value))),
+          source = "USDA",
+          years = 2022,
+          bubbles = F,
+          breaks = breaks_vec,
+          palette = list("high_color" = color)
+          )
+        }
+      interactive_tune_breaks(map_call_prod, default_breaks)
+      }
+    }
+    
+  })
+
 ```
 
 ```{r}
@@ -342,10 +1089,9 @@ crop = "maple syrup"
     map(data = get(crop) |> filter(domain == "NUMBER OF TAPS", commodity_desc == toupper(crop), class_desc == "ALL CLASSES"),
       map = county_map_ag,
       state_map = state_map,
-      graphicspath = graphicspath_farm,
       title = "Maple Syrup Taps",
       source = "USDA",
-      years = c(2017, 2022),
+      years = 2022,
       bubbles = T,
       unit = "taps",
       max_bubble_size = 10,
@@ -353,3 +1099,12 @@ crop = "maple syrup"
                      "low_color" = "beige")
       )
 ```
+
+#CA-specific map?
+things that are grown almost exclusively in CA:
+    #walnuts
+    #tomatoes
+    #almonds
+    #peaches
+    #grapes
+    #broccoli
